@@ -82,7 +82,9 @@ function padFixture({ failCreateAt = null, clientVersion = null, normalizeBareNp
     dmt_SelectControl: { getCurrentDocumentInfo: async () => ({ uuid: target.documentUuid, documentType: 3 }) },
     dmt_Project: { getCurrentProjectInfo: async () => ({ uuid: target.projectUuid }) },
     sys_Environment: { getEditorCurrentVersion: async () => clientVersion },
+    pcb_PrimitiveComponent: { getAll: async () => [], getAllPinsByPrimitiveId: async () => [] },
     pcb_PrimitivePad: api,
+    pcb_PrimitiveVia: { getAll: async () => [] },
   };
   return { eda, items: () => items, createCount: () => createCount };
 }

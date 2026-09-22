@@ -1,3 +1,5 @@
+import { createPadCollisionGuard } from './pad-collision.mjs';
+
 // These functions are serialized into the EasyEDA extension's async (eda) context.
 // Keep them free of Node imports and external variables.
 export async function readRuntime(eda, request) {
@@ -148,11 +150,12 @@ export async function readRuntime(eda, request) {
  const offset=request.offset??0,limit=request.limit??100;return {total:items.length,offset,limit,items:items.slice(offset,offset+limit),hasMore:offset+limit<items.length};
 }
 
-export async function batchRuntime(eda, job) {
+export async function batchRuntime(eda, job, collisionFactory = createPadCollisionGuard) {
  const tol=job.toleranceMil??0.02,target=job.target;
  const nativeValue=value=>{if(value&&typeof value.getSource==='function')return nativeValue(value.getSource());if(Array.isArray(value))return value.map(nativeValue);return value;};
  const state=(o,k)=>{if(o==null)return undefined;const g=o['getState_'+k[0].toUpperCase()+k.slice(1)];const v=nativeValue(typeof g==='function'?g.call(o):o[k]);return v===undefined&&k==='primitiveLock'?false:v;};
  const id=o=>state(o,'primitiveId');
+ const padCollisionGuard=collisionFactory(eda,{state,id,toleranceMil:tol});
  const equal=(actual,expected)=>{if(typeof expected==='number')return typeof actual==='number'&&Math.abs(actual-expected)<=tol;if(Array.isArray(expected))return Array.isArray(actual)&&actual.length===expected.length&&expected.every((v,i)=>equal(actual[i],v));if(expected&&typeof expected==='object')return actual&&typeof actual==='object'&&Object.entries(expected).every(([k,v])=>equal(actual[k],v));return actual===expected;};
  const clientVersion=await eda.sys_Environment?.getEditorCurrentVersion?.()??null;
  const standalonePadGridMil=clientVersion==='4.1.60'?0.1:null;
@@ -277,7 +280,9 @@ export async function batchRuntime(eda, job) {
    if(op.kind==='pour'&&op.type!=='pour.delete'&&(await eda.sys_Environment?.getEditorCurrentVersion?.())==='3.2.186'){const requested=op.state??op.set??{};if(('pourPriority'in requested)||('lineWidth'in requested&&Math.abs(requested.lineWidth-0.2)>1e-9))throw Error('Client 3.2.186 renumbers pour priorities and ignores nondefault outline widths. Use explicit native priority policy without a priority number and lineWidth=0.2 mil, or another independently verified client. No write performed.');}
    const api=apiFor(op.kind);if(!api)throw Error('Unsupported API kind');
    if(op.type.endsWith('.create')){
-    let ids=await verifyCreate(op);if(ids){results.push({id:op.id,status:'already_exists',primitiveIds:ids,verified:true,...await priorityInfo(op,ids)});continue;}
+    let overlapPreflight=null;
+    if(['pad','via'].includes(op.kind))overlapPreflight=await padCollisionGuard.assertStandaloneCandidate({kind:op.kind,desired:op.state});
+    let ids=await verifyCreate(op);if(ids){results.push({id:op.id,status:'already_exists',primitiveIds:ids,verified:true,...(overlapPreflight?{overlapGuard:{preflight:overlapPreflight}}:{}),...await priorityInfo(op,ids)});continue;}
     const s=op.state;await guard();
     if(op.kind==='line')await api.create(s.net,s.layer,s.startX,s.startY,s.endX,s.endY,s.lineWidth,s.primitiveLock);
     else if(op.kind==='arc')await api.create(s.net,s.layer,s.startX,s.startY,s.endX,s.endY,s.arcAngle,s.lineWidth,s.interactiveMode,s.primitiveLock);
@@ -291,7 +296,8 @@ export async function batchRuntime(eda, job) {
      await guard();await api.create(s.net,s.layer,polygon,'solid',s.preserveSilos,s.pourName,s.pourPriority,s.lineWidth,s.primitiveLock);
     }
     await guard();ids=await verifyCreate(op);if(!ids)throw Error('Creation not verified by independent geometry readback');
-    results.push({id:op.id,status:'created',primitiveIds:ids,verified:true,requiresRepour:op.kind!=='polyline',...await priorityInfo(op,ids)});continue;
+    if(['pad','via'].includes(op.kind))padCollisionGuard.invalidate();
+    results.push({id:op.id,status:'created',primitiveIds:ids,verified:true,requiresRepour:op.kind!=='polyline',...(overlapPreflight?{overlapGuard:{preflight:overlapPreflight}}:{}),...await priorityInfo(op,ids)});continue;
    }
    let current=await readOne(api,op.kind,op.primitiveId);
    if(op.type.endsWith('.delete')){
@@ -300,7 +306,7 @@ export async function batchRuntime(eda, job) {
     if(!expectedMatches(current))throw Error('Old-value assertion failed before delete');
     if(state(current,'primitiveLock'))throw Error('Locked primitive: explicitly unlock in a separate operation');
     const old=plain(current,op.kind),beforePolygon=['fill','polyline'].includes(op.kind)?sourceOf(current):undefined;
-    await guard();current=await readOne(api,op.kind,op.primitiveId);if(!expectedMatches(current)||state(current,'primitiveLock'))throw Error('Old-value assertion failed after delete preflight');await api.delete(op.primitiveId);await guard();if(await readOne(api,op.kind,op.primitiveId))throw Error('Delete readback still contains target');results.push({id:op.id,status:'deleted',primitiveId:op.primitiveId,before:old,...(beforePolygon?{beforePolygon}:{}),verified:true,requiresRepour:true});continue;
+    await guard();current=await readOne(api,op.kind,op.primitiveId);if(!expectedMatches(current)||state(current,'primitiveLock'))throw Error('Old-value assertion failed after delete preflight');await api.delete(op.primitiveId);await guard();if(await readOne(api,op.kind,op.primitiveId))throw Error('Delete readback still contains target');if(['pad','via'].includes(op.kind))padCollisionGuard.invalidate();results.push({id:op.id,status:'deleted',primitiveId:op.primitiveId,before:old,...(beforePolygon?{beforePolygon}:{}),verified:true,requiresRepour:true});continue;
    }
    const desired={...op.expected,...op.set},desiredPolygon=['fill','polyline'].includes(op.kind)?(op.polygon??op.expectedPolygon):null;
    const expectedMatches=value=>matches(value,op.expected,{standalonePadState:op.kind==='pad'})&&(!['fill','polyline'].includes(op.kind)||equalSource(value,op.expectedPolygon));
@@ -309,18 +315,20 @@ export async function batchRuntime(eda, job) {
    if(!current)throw Error('Primitive ID is stale; inspect current geometry before replanning');
    if(!already&&!expectedMatches(current))throw Error('Old-value assertion failed before modify');
    if(!already&&state(current,'primitiveLock')&&op.set.primitiveLock!==false)throw Error('Locked primitive requires an explicit unlock');
-   let beforePads=null,beforePinMap=null,affectedNets=[];
+   const before=plain(current,op.kind);
+   let beforePads=null,beforePinMap=null,affectedNets=[],overlapPreflight=null,overlapPostflight=null;
    const pinMap=pads=>JSON.stringify(pads.map(p=>{const number=state(p,'padNumber'),net=state(p,'net');if(number===undefined||number===null||String(number)==='')throw Error('Pad number unavailable; cannot guard pin-net identity');return [String(number),net??''];}).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b))));
    if(op.kind==='component'){
     beforePads=await eda.pcb_PrimitiveComponent.getAllPinsByPrimitiveId(op.primitiveId);if(!Array.isArray(beforePads))throw Error('Component pads unavailable');
     beforePinMap=pinMap(beforePads);
     affectedNets=[...new Set(beforePads.map(p=>state(p,'net')).filter(Boolean))];
+    overlapPreflight=await padCollisionGuard.assertComponentCandidate({componentId:op.primitiveId,current:before,desired});
     if(op.copperPolicy==='unrouted'){
      const lines=await eda.pcb_PrimitiveLine.getAll(),arcs=await eda.pcb_PrimitiveArc.getAll(),fills=await eda.pcb_PrimitiveFill.getAll(),vias=await eda.pcb_PrimitiveVia.getAll(),pours=await eda.pcb_PrimitivePour.getAll();
      if([...lines,...arcs,...fills,...vias,...pours].some(x=>affectedNets.includes(state(x,'net'))))throw Error('Connected nets already contain copper; use relayout with explicit replan and affectedNets');
     }else if(affectedNets.some(n=>!op.affectedNets.includes(n)))throw Error('affectedNets must cover every net of the moved component');
-   }
-   const before=plain(current,op.kind),beforePolygon=['fill','polyline'].includes(op.kind)?sourceOf(current):undefined;let returned=null;
+   }else if(['pad','via'].includes(op.kind))overlapPreflight=await padCollisionGuard.assertStandaloneCandidate({kind:op.kind,primitiveId:op.primitiveId,desired});
+   const beforePolygon=['fill','polyline'].includes(op.kind)?sourceOf(current):undefined;let returned=null;
    await guard();current=await readOne(api,op.kind,op.primitiveId);already=current&&desiredMatches(current);if(!already&&(!expectedMatches(current)||(state(current,'primitiveLock')&&op.set.primitiveLock!==false)))throw Error('Old-value assertion failed after asynchronous preflight');
    if(!already){
     let nativeSet=op.set;
@@ -335,13 +343,24 @@ export async function batchRuntime(eda, job) {
    if(op.kind==='component'){
     const pads=await eda.pcb_PrimitiveComponent.getAllPinsByPrimitiveId(actualId);if(!Array.isArray(pads))throw Error('Moved component pads unavailable');
     if(beforePinMap!==pinMap(pads))throw Error('Unexpected per-pad pin-net change while moving component; reconcile live state before retry');
-    result.affectedNets=affectedNets;result.requiresConnectivityCheck=true;result.pads=pads.map(p=>({primitiveId:id(p),padNumber:state(p,'padNumber'),net:state(p,'net'),x:state(p,'x'),y:state(p,'y'),layer:state(p,'layer')}));
-   }
+    try{overlapPostflight=await padCollisionGuard.assertActualComponent({componentId:op.primitiveId,component:current,pins:pads});}
+    catch(overlapError){
+     if(!already){
+      const rollbackSet={x:before.x,y:before.y,rotation:before.rotation,layer:before.layer,primitiveLock:before.primitiveLock};
+      await guard();const rollbackReturned=await api.modify(actualId,rollbackSet);const rollbackId=id(rollbackReturned)??actualId;await guard();const rolledBack=await readOne(api,op.kind,rollbackId);
+      if(!matches(rolledBack,op.expected))throw Error(`Placement safety postcheck failed and component rollback could not be verified: ${String(overlapError.message??overlapError)}`);
+      padCollisionGuard.invalidate();overlapError.details={...(overlapError.details??{}),rollbackVerified:true,rolledBackComponentId:rollbackId};
+     }
+     throw overlapError;
+    }
+    await padCollisionGuard.replaceComponent({previousComponentId:op.primitiveId,componentId:actualId,component:current,pins:pads});
+    result.affectedNets=affectedNets;result.requiresConnectivityCheck=true;result.overlapGuard={preflight:overlapPreflight,postflight:overlapPostflight,rollbackOnViolation:true};result.pads=pads.map(p=>({primitiveId:id(p),padNumber:state(p,'padNumber'),net:state(p,'net'),x:state(p,'x'),y:state(p,'y'),layer:state(p,'layer')}));
+   }else if(['pad','via'].includes(op.kind)){padCollisionGuard.invalidate();result.overlapGuard={preflight:overlapPreflight};}
    results.push(result);
-  }catch(error){return {ok:false,results,error:{operationId:op.id,message:String(error.message??error)},completedCount:results.length};}
+  }catch(error){return {ok:false,results,error:{operationId:op.id,code:error?.code??'OPERATION_FAILED',message:String(error.message??error),details:error?.details??null},completedCount:results.length};}
  }
  if (job.checkpoint) await job.checkpoint(results);
   return {ok:true,results,completedCount:results.length};
 }
 export const buildReadCode = request => `const r=await (${readRuntime.toString()})(eda,${JSON.stringify(request)});const t=${JSON.stringify(request.target ?? null)};if(t){const d=await eda.dmt_SelectControl.getCurrentDocumentInfo();if(d?.uuid!==t.documentUuid||d?.documentType!==3)throw Error('PCB document changed during read');if(t.projectUuid&&(await eda.dmt_Project.getCurrentProjectInfo())?.uuid!==t.projectUuid)throw Error('PCB project changed during read');}return r;`;
-export const buildBatchCode = job => `return await (${batchRuntime.toString()})(eda,${JSON.stringify(job)});`;
+export const buildBatchCode = job => `return await (${batchRuntime.toString()})(eda,${JSON.stringify(job)},(${createPadCollisionGuard.toString()}));`;
