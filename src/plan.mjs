@@ -1,7 +1,7 @@
 import { auditGeometry } from './audit.mjs';
 import { arcBounds, describeArc, pointToArcDistance } from './arc-geometry.mjs';
 // Explicit geometry only: no placement optimization and no path search.
-export const VERSION = '2.5.0';
+export const VERSION = '2.5.1';
 export const LAYERS = Object.freeze({ TOP:1, BOTTOM:2, TOP_SILKSCREEN:3, BOTTOM_SILKSCREEN:4, BOARD_OUTLINE:11, MULTI:12, ...Object.fromEntries(Array.from({length:30},(_,i)=>[`INNER_${i+1}`,15+i])) });
 export const COPPER = new Set(['TOP','BOTTOM',...Array.from({length:30},(_,i)=>`INNER_${i+1}`)]);
 const FIELDS = {
@@ -100,12 +100,11 @@ function polygonIntersectsCircle(points,circle){
  return false;
 }
 const polygonSource=points=>[...points[0],'L',...points.slice(1).flat(),...points[0]];
-function assertOutlineCentered(source,tolerance,label='Board outline'){
+function assertOutlineAnchored(source,tolerance,label='Board outline'){
  const circle=Array.isArray(source)&&source[0]==='CIRCLE'?source:null;
- if(circle){assert(Math.abs(circle[1])<=tolerance&&Math.abs(circle[2])<=tolerance,`${label} must use the coordinate origin [0,0] as its geometric center`);return;}
+ if(circle){assert(Math.abs(circle[1])<=tolerance&&Math.abs(circle[2])<=tolerance,`${label} circle center must use the coordinate origin [0,0]`);return;}
  const points=simplePolygonFromSource(source,1,label);
- const minX=Math.min(...points.map(point=>point[0])),maxX=Math.max(...points.map(point=>point[0])),minY=Math.min(...points.map(point=>point[1])),maxY=Math.max(...points.map(point=>point[1]));
- assert(Math.abs((minX+maxX)/2)<=tolerance&&Math.abs((minY+maxY)/2)<=tolerance,`${label} bounding-box center must be the coordinate origin [0,0]`);
+ assert(points.some(([x,y])=>Math.abs(x)<=tolerance&&Math.abs(y)<=tolerance),`${label} must include the coordinate origin [0,0] as an explicit polygon vertex`);
 }
 function simplePolygonFromSource(source,scale,label){
  if(Array.isArray(source)&&source.length===1&&Array.isArray(source[0]))source=source[0];
@@ -249,7 +248,7 @@ export function validatePlan(raw) {
     assert(op.points===undefined,'Circular outline uses position and diameter, not points');
     const [cx,cy]=point(op.position,scale,'outline center'),diameter=number(op.diameter,'diameter')*scale;assert(diameter>0,'Positive outline diameter required');
     const radius=diameter/2,polygon=['CIRCLE',cx,cy,radius];
-    assertOutlineCentered(polygon,options.toleranceMil,'New circular board outline');
+    assertOutlineAnchored(polygon,options.toleranceMil,'New circular board outline');
     if(constraints.boardBounds){const b=constraints.boardBounds,t=options.toleranceMil;assert(cx-radius>=b.minX-t&&cx+radius<=b.maxX+t&&cy-radius>=b.minY-t&&cy+radius<=b.maxY+t,'Circular outline exceeds supplied rectangular boardBounds');}
     plan.operations.push({id:op.id,type:'polyline.create',kind:'polyline',state:{net:'',layer:11,lineWidth:width,primitiveLock:!!op.locked},polygon});
    }else{
@@ -263,7 +262,7 @@ export function validatePlan(raw) {
     let area=0;for(let i=0;i<pts.length;i++){const a=pts[i],b=pts[(i+1)%pts.length];segment(a,b,options.toleranceMil,false);area+=a[0]*b[1]-b[0]*a[1];}
     assert(Math.abs(area)>options.toleranceMil,'Degenerate outline polygon');
     if(constraints.boardBounds){const b=constraints.boardBounds,t=options.toleranceMil;for(const [x,y]of pts)assert(x>=b.minX-t&&x<=b.maxX+t&&y>=b.minY-t&&y<=b.maxY+t,'Outline vertices exceed supplied rectangular boardBounds');}
-    const polygon=[...pts[0],'L',...pts.slice(1).flat(),...pts[0]];assertOutlineCentered(polygon,options.toleranceMil,'New polygon board outline');
+    const polygon=[...pts[0],'L',...pts.slice(1).flat(),...pts[0]];assertOutlineAnchored(polygon,options.toleranceMil,'New polygon board outline');
     plan.operations.push({id:op.id,type:'polyline.create',kind:'polyline',state:{net:'',layer:11,lineWidth:width,primitiveLock:!!op.locked},polygon});
    }
   } else if(op.type==='route.create'){
@@ -319,7 +318,7 @@ export function validatePlan(raw) {
      }
     }
     assert(Object.keys(set).length>0||polygon,'Empty polyline modification');
-    const desiredPolygon=polygon??expectedPolygon;if(polygon)assertOutlineCentered(polygon,options.toleranceMil,'Modified board outline');
+    const desiredPolygon=polygon??expectedPolygon;if(polygon)assertOutlineAnchored(polygon,options.toleranceMil,'Modified board outline');
     if(constraints.boardBounds){const b=constraints.boardBounds,t=options.toleranceMil;if(desiredPolygon[0]==='CIRCLE'){const [,cx,cy,radius]=desiredPolygon;assert(cx-radius>=b.minX-t&&cx+radius<=b.maxX+t&&cy-radius>=b.minY-t&&cy+radius<=b.maxY+t,'Circular outline exceeds supplied rectangular boardBounds');}else{const pts=[];for(const token of desiredPolygon){if(typeof token==='number')pts.push(token);}for(let i=0;i<pts.length;i+=2)assert(pts[i]>=b.minX-t&&pts[i]<=b.maxX+t&&pts[i+1]>=b.minY-t&&pts[i+1]<=b.maxY+t,'Outline vertices exceed supplied rectangular boardBounds');}}
     plan.operations.push({id:op.id,type:op.type,kind:'polyline',primitiveId:string(op.primitiveId,'primitiveId'),expected,set,expectedPolygon,...(polygon?{polygon}:{})});
    }
@@ -378,4 +377,4 @@ export function validatePlan(raw) {
  }
  return plan;
 }
-export function planSummary(p){return {schema:p.schema,intent:p.intent,target:p.target,phase:p.phase,inputUnits:p.inputUnits,executionUnits:'mil',sourceOperationCount:p.sourceOperationCount,expandedOperationCount:p.operations.length,batchSize:p.options.batchSize,netRuleCount:Object.keys(p.constraints.netRules).length,operationCounts:p.operations.reduce((a,o)=>(a[o.type]=(a[o.type]??0)+1,a),{}),checks:['finite geometry','explicit units','target PCB UUID','expected old values','new board outline centered at coordinate origin','native circular or closed polygon outlines','45-degree copper policy','supplied layer/width/drill/annular/bounds constraints'],notChecked:['full native DRC','electrical connectivity','impedance/current/thermal performance','component body/courtyard collision','live cross-component pad/via collision (execute-time guard)','actual pour fill connectivity']};}
+export function planSummary(p){return {schema:p.schema,intent:p.intent,target:p.target,phase:p.phase,inputUnits:p.inputUnits,executionUnits:'mil',sourceOperationCount:p.sourceOperationCount,expandedOperationCount:p.operations.length,batchSize:p.options.batchSize,netRuleCount:Object.keys(p.constraints.netRules).length,operationCounts:p.operations.reduce((a,o)=>(a[o.type]=(a[o.type]??0)+1,a),{}),checks:['finite geometry','explicit units','target PCB UUID','expected old values','new board outline anchored to coordinate origin','native circular or closed polygon outlines','45-degree copper policy','supplied layer/width/drill/annular/bounds constraints'],notChecked:['full native DRC','electrical connectivity','impedance/current/thermal performance','component body/courtyard collision','live cross-component pad/via collision (execute-time guard)','actual pour fill connectivity']};}

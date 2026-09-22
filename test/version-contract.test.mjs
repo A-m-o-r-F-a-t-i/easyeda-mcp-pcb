@@ -11,7 +11,7 @@ const packageVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'
 const lock = JSON.parse(fs.readFileSync(path.join(root, 'package-lock.json'), 'utf8'));
 
 test('MCP package, lockfile, plan and server versions stay identical', () => {
-  assert.equal(packageVersion, '2.5.0');
+  assert.equal(packageVersion, '2.5.1');
   assert.equal(lock.version, packageVersion);
   assert.equal(lock.packages[''].version, packageVersion);
   assert.equal(PLAN_VERSION, packageVersion);

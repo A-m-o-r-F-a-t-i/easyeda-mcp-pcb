@@ -10,7 +10,7 @@ import { runGuardedNative } from './execution-context.mjs';
 import { exportPcb } from './export.mjs';
 import { readRouteScene } from './route-scene.mjs';
 import { auditPcb, statusPcb, synchronizePcb } from './production-tools.mjs';
-export const VERSION = '2.5.0';
+export const VERSION = '2.5.1';
 import { captureSnapshot, inspectPinmap } from './verification.mjs';
 import { inspectAllSilkscreen } from './silkscreen-all.mjs';
 import { exportNativeBackup, captureView } from './backup.mjs';
@@ -213,7 +213,7 @@ server.registerTool('pcb_audit_geometry', {
 
 server.registerTool('pcb_validate_plan' , {
   title: 'Validate explicit PCB plan',
-  description: 'Validate an easyeda-pcb-plan/v2 file or object offline. Checks exact units/target, legal phases, new board outlines centered at coordinate origin, native circle or closed polygon geometry, 45-degree copper, PTH/NPTH and terminal pads, widths, drills, annular rings, layers, bounds, component move policy and expected-state guards. Live cross-object pad collision is enforced during execution. It performs no EasyEDA write.',
+  description: 'Validate an easyeda-pcb-plan/v2 file or object offline. Checks exact units/target, legal phases, new outline anchoring (circle center or polygon vertex at the origin), native circle or closed polygon geometry, 45-degree copper, PTH/NPTH and terminal pads, widths, drills, annular rings, layers, bounds, component move policy and expected-state guards. Live cross-object pad collision is enforced during execution. It performs no EasyEDA write.',
   annotations: {readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false},
   inputSchema: planInputSchema,
 }, async ({ planPath, plan }) => handled(async () => {
@@ -240,7 +240,7 @@ server.registerTool('pcb_execute_text_plan', {
 
 server.registerTool('pcb_execute_plan', {
   title: 'Execute explicit PCB layout/routing plan',
-  description: 'Execute explicit easyeda-pcb-plan/v2 geometry with no auto-placement or path search. New outlines must be centered at [0,0]. Layout/relayout plans can execute one coherent placement round of up to 100 expanded operations. Before and after placement writes, live pad geometry blocks different-component pad overlap and standalone pad/via intrusion into component pads; unsafe native layer transforms are rolled back. Writes are independently read back and partial outcomes return exact recovery instructions.',
+  description: 'Execute explicit easyeda-pcb-plan/v2 geometry with no auto-placement or path search. New circles use center [0,0]; polygon outlines include vertex [0,0]. Layout/relayout plans can execute one coherent placement round of up to 100 expanded operations. Before and after placement writes, live pad geometry blocks different-component pad overlap and standalone pad/via intrusion into component pads; unsafe native layer transforms are rolled back. Writes are independently read back and partial outcomes return exact recovery instructions.',
   annotations: {readOnlyHint:false,destructiveHint:true,idempotentHint:false,openWorldHint:false},
   inputSchema: {
     ...planInputSchema,
@@ -469,7 +469,7 @@ const descriptions = {
   pcb_status: 'Read exact PCB identity and units. Optionally include runtime capabilities, native board statistics or a prepared change-state guard.',
   pcb_read: 'Read paged native PCB objects or a parsed DSN route scene. DSN coordinates retain a separate frame until a transform is verified.',
   pcb_pick: 'Find native PCB objects by a point or rectangle without changing selection; coordinates require explicit units.',
-  pcb_execute_plan: 'Execute PCB geometry with readback. Center new outlines on [0,0]. Layout/relayout defaults to one batch up to 100 operations. Reject cross-component pad overlap and standalone pad/via intrusion; roll back unsafe layer changes and return a placement gate.',
+  pcb_execute_plan: 'Execute PCB geometry. Anchor circles by center and polygons by a [0,0] vertex. Layout/relayout uses one batch up to 100 operations. Reject cross-component pad overlap and pad/via intrusion; roll back unsafe layer changes and return a placement gate.',
   pcb_execute_text_plan: 'Validate, prepare or execute a text/attribute plan. Execution requires its prepared guard and independently verifies written text.',
   pcb_cleanup_components: 'Preflight or execute guarded bulk cleanup: unlock all components and remove component reference-designator silkscreen while preserving mandatory Designator identity, geometry, ordinary strings and all other attributes.',
   pcb_rebuild_pours: 'Rebuild selected or all copper pours, read actual fill results and optionally save. Partial rebuilding may affect other fills on client 3.2.186.',
