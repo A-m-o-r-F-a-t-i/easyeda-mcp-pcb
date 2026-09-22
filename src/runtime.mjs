@@ -37,9 +37,11 @@ export async function readRuntime(eda, request) {
     const native = canonical.get(pad.primitiveId);
     if (native && state(native,'hole') !== undefined) {
       const keys=pad.hole!=null||state(native,'hole')!=null?['padNumber','net','layer','x','y']:['padNumber','net','layer'];
+      const canonicalPoseToleranceMil=clientVersion==='4.1.60'?0.11:1e-6; // 4.1.60 rounds transformed component-pad coordinates to the 0.1 mil grid.
       for (const key of keys) {
         const value = state(native, key);
-        if (value !== undefined && pad[key] !== undefined && (typeof value === 'number' ? Math.abs(value-pad[key])>1e-6 : String(value)!==String(pad[key]))) throw Error('Canonical pad identity/pose drift: '+pad.primitiveId+' '+key);
+        const numericTolerance=key==='x'||key==='y'?canonicalPoseToleranceMil:1e-6;
+        if (value !== undefined && pad[key] !== undefined && (typeof value === 'number' ? Math.abs(value-pad[key])>numericTolerance : String(value)!==String(pad[key]))) throw Error('Canonical pad identity/pose drift: '+pad.primitiveId+' '+key);
       }
       const raw = pad.hole;
       for (const key of ['hole','holeOffsetX','holeOffsetY','holeRotation','metallization']) {

@@ -1,10 +1,10 @@
-# EasyEDA PCB MCP 2.4.10
+# EasyEDA PCB MCP 2.4.11
 
 Typed PCB tools over a local EasyEDA Pro Bridge, exposed as a compact 21-tool production profile plus diagnostics and legacy compatibility profiles. The executor applies explicit design decisions, reads actual results and rejects stale targets or old-state assertions. Version 2.4.9 makes verbose native DRC resumable and bounded: the EasyEDA window retains the native result under a job ID, the MCP returns `RUNNING` instead of timing out, and completed calls return full counts and category/rule/object/layer summaries with paged native violation details instead of duplicating the complete native tree. Invalid, missing, expired or failed native results remain explicitly unverified. Version 2.4.8 fixed the live-client component cleanup adapter while preserving mandatory `Designator` identity. True native circular board outlines, closed polygon outlines, standalone PTH/NPTH round or slot objects, networked terminal pads, `boardDelta`, machine-readable `workflowReceipt`, exact-operation `recoveryDirective` and resumable partial batches remain supported. The service does not expose automatic placement, path search, automatic routing, route clearing, order placement, arbitrary JavaScript or whole-rule-table overwrite.
 
 ## Installation and verification
 
-Version 2.4.10 keeps timed-out DRC jobs terminal even when a native callback arrives late, distinguishes an unavailable native API from a failed invocation, and records synchronous checker attempts correctly. Both DRC entry points accept at most 250 detail items per page; complete totals remain independent of the requested page.
+Version 2.4.11 also accepts the verified 0.1 mil transformed component-pad coordinate quantization used by EasyEDA Pro 4.1.60 while keeping pad number, net, layer, and larger pose drift strict. It retains the resumable native DRC behavior and bounded detail pages introduced previously.
 
 Requires Node.js >=22, an already authorized local EasyEDA Bridge and an explicitly selected PCB. Install locked dependencies and run:
 

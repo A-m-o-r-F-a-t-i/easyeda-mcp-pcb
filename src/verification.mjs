@@ -92,6 +92,8 @@ export async function inspectPinmapRuntime(eda, request) {
   const selector=request.componentIds??request.designators;
   if(!Array.isArray(selector)||!selector.length||selector.length>500||new Set(selector).size!==selector.length) throw Error('Unique nonempty component selector required, at most 500');
   const state=(o,k)=>{const fn=o?.['getState_'+k[0].toUpperCase()+k.slice(1)];return typeof fn==='function'?fn.call(o):o?.[k];};
+  const clientVersion=await eda.sys_Environment?.getEditorCurrentVersion?.()??null;
+  const canonicalPoseToleranceMil=clientVersion==='4.1.60'?0.11:1e-6; // 4.1.60 rounds transformed component-pad coordinates to the 0.1 mil grid.
 
   const canonicalPadMap = async () => {
     if (typeof eda.pcb_PrimitivePad?.getAll !== 'function') return new Map();
@@ -111,7 +113,8 @@ export async function inspectPinmapRuntime(eda, request) {
       const keys=pad.hole!=null||state(native,'hole')!=null?['padNumber','net','layer','x','y']:['padNumber','net','layer'];
       for (const key of keys) {
         const value = state(native, key);
-        if (value !== undefined && pad[key] !== undefined && (typeof value === 'number' ? Math.abs(value-pad[key])>1e-6 : String(value)!==String(pad[key]))) throw Error('Canonical pad identity/pose drift: '+pad.primitiveId+' '+key);
+        const numericTolerance=key==='x'||key==='y'?canonicalPoseToleranceMil:1e-6;
+        if (value !== undefined && pad[key] !== undefined && (typeof value === 'number' ? Math.abs(value-pad[key])>numericTolerance : String(value)!==String(pad[key]))) throw Error('Canonical pad identity/pose drift: '+pad.primitiveId+' '+key);
       }
       const raw = pad.hole;
       for (const key of ['hole','holeOffsetX','holeOffsetY','holeRotation','metallization']) {
