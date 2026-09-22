@@ -6,7 +6,27 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const projectRoot = path.resolve(root, '..', '..');
-const referencesRoot = path.join(projectRoot, 'easyeda-api-skill-dev', 'references');
+
+function resolveReferencesRoot() {
+  const configuredSkillRoot = process.env.EASYEDA_API_SKILL_ROOT
+    ? path.resolve(process.env.EASYEDA_API_SKILL_ROOT)
+    : null;
+  const configuredReferencesRoot = process.env.EASYEDA_API_REFERENCES_ROOT
+    ? path.resolve(process.env.EASYEDA_API_REFERENCES_ROOT)
+    : null;
+  const candidates = [
+    configuredReferencesRoot,
+    configuredSkillRoot ? path.join(configuredSkillRoot, 'references') : null,
+    path.join(projectRoot, 'skills', 'easyeda-api', 'references'),
+    path.resolve(root, '..', 'easyeda-skill-api', 'references'),
+    path.join(projectRoot, 'easyeda-api-skill-dev', 'references'),
+  ].filter(Boolean);
+  const found = candidates.find(candidate => fs.existsSync(path.join(candidate, 'classes', 'EDA.md')));
+  assert.ok(found, `EasyEDA API references not found. Set EASYEDA_API_SKILL_ROOT or EASYEDA_API_REFERENCES_ROOT. Checked: ${candidates.join(', ')}`);
+  return found;
+}
+
+const referencesRoot = resolveReferencesRoot();
 const classesRoot = path.join(referencesRoot, 'classes');
 const registry = JSON.parse(fs.readFileSync(path.join(root, 'sdk-capability-registry.json'), 'utf8'));
 

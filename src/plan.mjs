@@ -1,7 +1,7 @@
 import { auditGeometry } from './audit.mjs';
 import { arcBounds, describeArc, pointToArcDistance } from './arc-geometry.mjs';
 // Explicit geometry only: no placement optimization and no path search.
-export const VERSION = '2.4.6';
+export const VERSION = '2.4.7';
 export const LAYERS = Object.freeze({ TOP:1, BOTTOM:2, TOP_SILKSCREEN:3, BOTTOM_SILKSCREEN:4, BOARD_OUTLINE:11, MULTI:12, ...Object.fromEntries(Array.from({length:30},(_,i)=>[`INNER_${i+1}`,15+i])) });
 export const COPPER = new Set(['TOP','BOTTOM',...Array.from({length:30},(_,i)=>`INNER_${i+1}`)]);
 const FIELDS = {
@@ -343,6 +343,7 @@ export function validatePlan(raw) {
   } else if(/^(line|arc|pad|via|component|pour)\.(modify|delete)$/.test(op.type)){
    const [kind,action]=op.type.split('.');assert(!(kind==='component'&&action==='delete'),'Component deletion belongs to explicit netlist/ECO workflow');
    const expected=normalizeFields(op.expected,kind,scale,true),set=action==='modify'?normalizeFields(op.set,kind,scale):null;
+   if(kind==='component'&&set&&set.primitiveLock===undefined)set.primitiveLock=false;
    if(set)assert(Object.keys(set).length>0,'Empty modification');
    const n={id:op.id,type:op.type,kind,primitiveId:string(op.primitiveId,'primitiveId'),expected,set};
    if(kind==='component'){

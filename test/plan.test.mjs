@@ -55,3 +55,16 @@ test('requires explicit replan policy before moving a routed component', () => {
   }];
   assert.throws(() => validatePlan(raw), /copperPolicy/i);
 });
+
+test('component modifications default to unlocked while preserving explicit lock requests', () => {
+  const raw = basePlan([{ id: 'dummy', type: 'line.create', net: 'SIG', layer: 'TOP', start: [1, 1], end: [4, 1], width: 0.2 }]);
+  raw.phase = 'relayout';
+  raw.operations = [{
+    id: 'move-u1', type: 'component.modify', primitiveId: 'U1-ID',
+    expected: { designator: 'U1', x: 10, y: 10, rotation: 0, layer: 1, primitiveLock: true },
+    set: { x: 12 }, copperPolicy: 'unrouted', affectedNets: ['SIG'],
+  }];
+  assert.equal(validatePlan(raw).operations[0].set.primitiveLock, false);
+  raw.operations[0].set.primitiveLock = true;
+  assert.equal(validatePlan(raw).operations[0].set.primitiveLock, true);
+});

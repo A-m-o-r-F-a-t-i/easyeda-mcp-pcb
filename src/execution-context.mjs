@@ -41,7 +41,7 @@ export function validatePublicWriteTransition(before, result, observed) {
 export async function contextVerifiedPublicWrite(operation, adapter) {
   const context = storage.getStore();
   if (!context) throw gatewayError('INVALID_REQUEST', 'No guarded public API execution context');
-  if (!['pcb.keepoutRecords','pcb.geometryLegacy'].includes(operation)) throw gatewayError('INVALID_REQUEST', 'Unsupported internal public API adapter');
+  if (!['pcb.keepoutRecords','pcb.geometryLegacy','pcb.componentCleanup'].includes(operation)) throw gatewayError('INVALID_REQUEST', 'Unsupported internal public API adapter');
   const expected = { ...context.expected };
   await context.session.rpc('events.getState', {}, { expected });
   const executionId = `${context.executionId}:${context.sequence++}:${operation}`;

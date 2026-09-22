@@ -10,6 +10,7 @@ const expectedDefault = [
   'pcb_audit_geometry',
   'pcb_capture_inspection_view',
   'pcb_compare_associated_netlists',
+  'pcb_cleanup_components',
   'pcb_execute_plan',
   'pcb_execute_text_plan',
   'pcb_export',
@@ -36,6 +37,7 @@ const expectedLegacy = [
   'pcb_capture_view',
   'pcb_compare_associated_netlists',
   'pcb_compare_snapshots',
+  'pcb_cleanup_components',
   'pcb_execute_plan',
   'pcb_execute_text_plan',
   'pcb_export_backup',
@@ -62,7 +64,7 @@ const expectedLegacy = [
 const expectedDiagnostics = ['pcb_capture_snapshot', 'pcb_compare_snapshots', 'pcb_realtime_drc'].sort();
 
 async function connectProfile(profile) {
-  const client = new Client({ name: `easyeda-pcb-mcp-smoke-${profile}`, version: '2.4.6' });
+  const client = new Client({ name: `easyeda-pcb-mcp-smoke-${profile}`, version: '2.4.7' });
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: ['src/server.mjs'],
@@ -139,12 +141,12 @@ try {
   assert.deepEqual(diagnosticNames, expectedDiagnostics);
 
   await new Promise(resolve => setTimeout(resolve, 25));
-  assert.match(production.stderr(), /easyeda-pcb 2\.4\.1 profile=default tools=20/);
-  assert.match(legacy.stderr(), /easyeda-pcb 2\.4\.1 profile=legacy tools=29/);
-  assert.match(diagnostics.stderr(), /easyeda-pcb 2\.4\.1 profile=diagnostics tools=3/);
+  assert.match(production.stderr(), /easyeda-pcb 2\.4\.7 profile=default tools=21/);
+  assert.match(legacy.stderr(), /easyeda-pcb 2\.4\.7 profile=legacy tools=30/);
+  assert.match(diagnostics.stderr(), /easyeda-pcb 2\.4\.7 profile=diagnostics tools=3/);
   process.stdout.write(`${JSON.stringify({
     ok: true,
-    version: '2.4.6',
+    version: '2.4.7',
     profiles: { default: names, legacy: legacyNames, diagnostics: diagnosticNames },
   }, null, 2)}\n`);
 } finally {

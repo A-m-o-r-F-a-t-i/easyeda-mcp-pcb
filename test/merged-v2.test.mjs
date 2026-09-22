@@ -98,10 +98,10 @@ test('an output created by another actor is preserved during atomic finalization
   assert.equal(await fs.readFile(destination, 'utf8'), 'other');
 });
 
-test('tool profiles expose exactly 20 production tools, 3 diagnostics and 29 legacy entries', () => {
-  assert.equal(getToolRegistry().size, 20);
+test('tool profiles expose exactly 21 production tools, 3 diagnostics and 30 legacy entries', () => {
+  assert.equal(getToolRegistry().size, 21);
   assert.equal(getToolRegistry('diagnostics').size, 3);
-  assert.equal(getToolRegistry('legacy').size, 29);
+  assert.equal(getToolRegistry('legacy').size, 30);
   for (const name of ['pcb_capabilities', 'pcb_validate_plan', 'pcb_validate_text_plan', 'pcb_capture_view', 'pcb_prepare_schematic_sync', 'pcb_capture_snapshot', 'pcb_compare_snapshots', 'pcb_realtime_drc']) assert.equal(getToolRegistry().has(name), false);
   assert.equal(getToolRegistry().has('pcb_export'), true);
 });
@@ -118,14 +118,14 @@ test('production target fields and mutation guards are enforced at schema bounda
   await assert.rejects(invokeRegisteredTool('pcb_rebuild_pours', { target: { documentUuid: 'd1', projectUuid: 'p1', windowId: 'w1' } }));
   await assert.rejects(invokeRegisteredTool('pcb_execute_plan', { plan: {}, mode: 'validate', hiddenBypass: true }));
 });
-test('stdio discovery returns the actual 20-tool schema and honors validation mode', async t => {
+test('stdio discovery returns the actual 21-tool schema and honors validation mode', async t => {
   const transport = new StdioClientTransport({ command: process.execPath, args: [fileURLToPath(new URL('../src/server.mjs', import.meta.url))], env: { ...process.env, EASYEDA_PCB_PROFILE: 'default' }, stderr: 'pipe' });
   const client = new Client({ name: 'merged-v2-test', version: '1.0.0' });
   t.after(() => client.close());
   await client.connect(transport);
   const { tools } = await client.listTools();
-  assert.equal(tools.length, 20);
-  assert.equal(new Set(tools.map(item => item.name)).size, 20);
+  assert.equal(tools.length, 21);
+  assert.equal(new Set(tools.map(item => item.name)).size, 21);
   assert.ok(tools.every(item => item.description.length < 260));
   const result = await client.callTool({ name: 'pcb_execute_plan', arguments: { plan: {}, mode: 'validate' } });
   assert.equal(result.isError, true);
