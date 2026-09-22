@@ -240,7 +240,7 @@ server.registerTool('pcb_execute_text_plan', {
 
 server.registerTool('pcb_execute_plan', {
   title: 'Execute explicit PCB layout/routing plan',
-  description: 'Execute explicit easyeda-pcb-plan/v2 geometry with no auto-placement or path search. New outlines must be centered at [0,0]. Before and after placement writes, live pad geometry blocks different-component pad overlap and standalone pad/via intrusion into component pads; unsafe native layer transforms are rolled back. Writes are independently read back and partial outcomes return exact recovery instructions.',
+  description: 'Execute explicit easyeda-pcb-plan/v2 geometry with no auto-placement or path search. New outlines must be centered at [0,0]. Layout/relayout plans can execute one coherent placement round of up to 100 expanded operations. Before and after placement writes, live pad geometry blocks different-component pad overlap and standalone pad/via intrusion into component pads; unsafe native layer transforms are rolled back. Writes are independently read back and partial outcomes return exact recovery instructions.',
   annotations: {readOnlyHint:false,destructiveHint:true,idempotentHint:false,openWorldHint:false},
   inputSchema: {
     ...planInputSchema,
@@ -469,7 +469,7 @@ const descriptions = {
   pcb_status: 'Read exact PCB identity and units. Optionally include runtime capabilities, native board statistics or a prepared change-state guard.',
   pcb_read: 'Read paged native PCB objects or a parsed DSN route scene. DSN coordinates retain a separate frame until a transform is verified.',
   pcb_pick: 'Find native PCB objects by a point or rectangle without changing selection; coordinates require explicit units.',
-  pcb_execute_plan: 'Execute PCB geometry with readback. New outlines are centered at [0,0]. Reject pad overlap between components and standalone pad/via intrusion into component pads; roll back unsafe layer changes. Partial outcomes return exact recovery instructions.',
+  pcb_execute_plan: 'Execute PCB geometry with readback. Center new outlines on [0,0]. Layout/relayout defaults to one batch up to 100 operations. Reject cross-component pad overlap and standalone pad/via intrusion; roll back unsafe layer changes and return a placement gate.',
   pcb_execute_text_plan: 'Validate, prepare or execute a text/attribute plan. Execution requires its prepared guard and independently verifies written text.',
   pcb_cleanup_components: 'Preflight or execute guarded bulk cleanup: unlock all components and remove component reference-designator silkscreen while preserving mandatory Designator identity, geometry, ordinary strings and all other attributes.',
   pcb_rebuild_pours: 'Rebuild selected or all copper pours, read actual fill results and optionally save. Partial rebuilding may affect other fills on client 3.2.186.',

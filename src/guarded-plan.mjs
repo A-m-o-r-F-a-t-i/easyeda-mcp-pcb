@@ -14,6 +14,50 @@ export function assertGuardMatchesPlan(guard, raw, normalized) {
 }
 
 const changedStatuses = new Set(['created', 'modified', 'deleted']);
+const bridgeGeometryKinds = new Set(['arc', 'polyline', 'pad', 'fill', 'stackup', 'component', 'via']);
+const padOverlapKinds = new Set(['component', 'pad', 'via']);
+
+export function requiresBridgeGeometryRuntime(kind, operations = []) {
+  return kind === 'geometry' && operations.some(operation => bridgeGeometryKinds.has(operation.kind));
+}
+
+export function resolveProtectedBatchSize(normalized) {
+  const size = normalized?.options?.batchSize;
+  if (!Number.isInteger(size) || size < 1 || size > 100) throw gatewayError('INVALID_REQUEST', 'Protected plan batchSize must be an integer from 1 to 100');
+  return size;
+}
+
+export function summarizePadOverlapGate(normalized, confirmedResults = [], failureCode = null) {
+  const operationIds = (normalized?.operations ?? [])
+    .filter(operation => padOverlapKinds.has(operation.kind) && /\.(create|modify)$/.test(operation.type))
+    .map(operation => operation.id);
+  if (failureCode === 'PAD_OVERLAP_BLOCKED') return {
+    state: 'BLOCKED',
+    nextPlacementRoundAllowed: false,
+    relevantOperationCount: operationIds.length,
+    checkedOperationCount: confirmedResults.filter(result => result?.overlapGuard).length,
+    missingEvidenceOperationIds: operationIds.filter(id => !confirmedResults.some(result => result?.id === id && result?.overlapGuard)),
+    scope: 'different-component pads and standalone pad/via versus component pads',
+  };
+  if (!operationIds.length) return {
+    state: 'NOT_APPLICABLE',
+    nextPlacementRoundAllowed: true,
+    relevantOperationCount: 0,
+    checkedOperationCount: 0,
+    missingEvidenceOperationIds: [],
+    scope: 'different-component pads and standalone pad/via versus component pads',
+  };
+  const checked = new Set(confirmedResults.filter(result => result?.overlapGuard).map(result => result.id));
+  const missingEvidenceOperationIds = operationIds.filter(id => !checked.has(id));
+  return {
+    state: missingEvidenceOperationIds.length ? 'UNVERIFIED' : 'CLEAR',
+    nextPlacementRoundAllowed: missingEvidenceOperationIds.length === 0,
+    relevantOperationCount: operationIds.length,
+    checkedOperationCount: operationIds.length - missingEvidenceOperationIds.length,
+    missingEvidenceOperationIds,
+    scope: 'different-component pads and standalone pad/via versus component pads',
+  };
+}
 
 /** Summarize verified writes without treating validation, no-ops or deployment as PCB progress. */
 export function summarizeBoardDelta(normalized, confirmedResults, remainingOperationIds = []) {
@@ -88,15 +132,15 @@ export async function runPlan(source, { kind = 'geometry', mode = 'execute', gua
       const capabilities = (await contextRpc('system.capabilities', {})).result;
       verifyNativeViaPrecision(normalized, capabilities.clientVersion);
     }
-    const size = Math.min(normalized.options.batchSize, 24);
-    const useLegacyGeometry = kind === 'geometry' && normalized.operations.some(op => ['arc', 'polyline', 'pad', 'fill', 'stackup'].includes(op.kind));
+    const size = resolveProtectedBatchSize(normalized);
+    const useBridgeGeometryRuntime = requiresBridgeGeometryRuntime(kind, normalized.operations);
     const results = [];
     let batches = 0, saves = 0, circularReadbackObjects = 0;
     try {
       for (let offset = 0; offset < normalized.operations.length; offset += size) {
         const operations = normalized.operations.slice(offset, offset + size);
         let batchResult;
-        if (useLegacyGeometry) {
+        if (useBridgeGeometryRuntime) {
           const adapter = await contextVerifiedPublicWrite('pcb.geometryLegacy', async (context, expected) => {
             const result = await executeBridgeCode(context.session.bridge, buildBatchCode({ target: normalized.target, toleranceMil: normalized.options.toleranceMil, operations }));
             const observed = await prepareGatewayState(context.session);
@@ -112,9 +156,15 @@ export async function runPlan(source, { kind = 'geometry', mode = 'execute', gua
           results.push(...verifiedPrefix);
           if (verifiedPrefix.length && normalized.options.saveAfterBatch) { await contextRpc('pcb.save', {}, { write: true }); saves++; }
           const failedOperationId = batchResult?.error?.operationId ?? operations[verifiedPrefix.length]?.id ?? null;
-          throw gatewayError('PARTIAL_SUCCESS', 'A plan batch stopped after a verified prefix. Reconcile the failed object and continue only the remaining suffix.', {
+          const failureCode = batchResult?.error?.code ?? null;
+          const overlapBlocked = failureCode === 'PAD_OVERLAP_BLOCKED';
+          throw gatewayError(overlapBlocked && verifiedPrefix.length === 0 ? 'PAD_OVERLAP_BLOCKED' : 'PARTIAL_SUCCESS', overlapBlocked
+            ? 'A placement batch was blocked by physical pad overlap. Keep the verified prefix, replan the conflicting placement, and do not begin another placement round.'
+            : 'A plan batch stopped after a verified prefix. Reconcile the failed object and continue only the remaining suffix.', {
             outcome: verifiedPrefix.length ? 'partial' : 'no-confirmed-change',
             response: batchResult,
+            blockingCause: failureCode,
+            padOverlapGate: summarizePadOverlapGate(normalized, results, failureCode),
             ...continuationDetails(normalized, results, failedOperationId),
           });
         }
@@ -137,10 +187,12 @@ export async function runPlan(source, { kind = 'geometry', mode = 'execute', gua
       }
       if (!normalized.options.saveAfterBatch) { await contextRpc('pcb.save', {}, { write: true }); saves++; }
       const boardDelta = summarizeBoardDelta(normalized, results, []);
-      return { ok: true, mode, source: loaded.source, planSha256, summary, completedOperationCount: results.length, batchCount: batches, saveCount: saves, boardDelta, workflowReceipt: createWorkflowReceipt({ mode, boardDelta }), ...(transport ? {constraintEnforcement:{...transport.enforcement, circularReadbackObjects}} : {}), requiresRepour: results.some(item => item.requiresRepour), requiresVisualReview: true, results };
+      const padOverlapGate = summarizePadOverlapGate(normalized, results);
+      return { ok: true, mode, source: loaded.source, planSha256, summary, completedOperationCount: results.length, batchCount: batches, saveCount: saves, boardDelta, padOverlapGate, workflowReceipt: createWorkflowReceipt({ mode, boardDelta }), ...(transport ? {constraintEnforcement:{...transport.enforcement, circularReadbackObjects}} : {}), requiresRepour: results.some(item => item.requiresRepour), requiresVisualReview: true, results };
     } catch (error) {
       const failedOperationId = error.details?.failedOperationId ?? error.details?.response?.error?.operationId ?? null;
-      error.details = { ...(error.details ?? {}), ...continuationDetails(normalized, results, failedOperationId), confirmedBatchCount: batches, source: loaded.source, planSha256 };
+      const failureCode = error.code === 'PAD_OVERLAP_BLOCKED' ? error.code : error.details?.response?.error?.code ?? null;
+      error.details = { ...(error.details ?? {}), padOverlapGate: error.details?.padOverlapGate ?? summarizePadOverlapGate(normalized, results, failureCode), ...continuationDetails(normalized, results, failedOperationId), confirmedBatchCount: batches, source: loaded.source, planSha256 };
       throw error;
     }
   });

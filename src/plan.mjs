@@ -234,8 +234,8 @@ export function validatePlan(raw) {
   constraints.netRules[net]=out;
  }
  if(ro.saveAfterBatch!==undefined)assert(typeof ro.saveAfterBatch==='boolean','saveAfterBatch: boolean required');
- const options={batchSize:ro.batchSize??24,saveAfterBatch:ro.saveAfterBatch!==false,toleranceMil:ro.toleranceMil??0.02};
- assert(Number.isInteger(options.batchSize)&&options.batchSize>=1&&options.batchSize<=100,'batchSize must be 1..100');
+ const options={batchSize:ro.batchSize??null,saveAfterBatch:ro.saveAfterBatch!==false,toleranceMil:ro.toleranceMil??0.02};
+ if(options.batchSize!==null)assert(Number.isInteger(options.batchSize)&&options.batchSize>=1&&options.batchSize<=100,'batchSize must be 1..100');
  assert(number(options.toleranceMil,'toleranceMil')>0&&options.toleranceMil<=0.1,'toleranceMil must be (0,0.1]');
  const plan={schema:raw.schema,intent:raw.intent,target:{...raw.target},units:'mil',inputUnits:raw.units,phase:raw.phase,constraints,options,operations:[],sourceOperationCount:raw.operations?.length};
  assert(Array.isArray(raw.operations)&&raw.operations.length>0&&raw.operations.length<=5000,'operations must contain 1..5000 items');
@@ -367,6 +367,7 @@ export function validatePlan(raw) {
  }
  const stackupOperations=plan.operations.filter(operation=>operation.kind==='stackup');if(stackupOperations.length)assert(plan.operations.length===1&&stackupOperations.length===1,'stackup.modify must be the only operation in its guarded plan');
  assert(plan.operations.length<=20000,'Expanded operations exceed 20000');
+ if(options.batchSize===null)options.batchSize=['layout','relayout'].includes(plan.phase)?Math.min(plan.operations.length,100):24;
  const expandedIds=new Set();for(const op of plan.operations){assert(!expandedIds.has(op.id),'Expanded operation IDs collide');expandedIds.add(op.id);if(op.state)validateState(op.kind,op.state,plan);else if(op.set)validateState(op.kind,{...op.expected,...op.set},plan);}
  // Cross-operation endpoint checks use neighbor-cell tolerance, avoiding rounding-bin misses.
  if(constraints.noRightAngle){

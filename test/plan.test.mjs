@@ -68,3 +68,30 @@ test('component modifications default to unlocked while preserving explicit lock
   raw.operations[0].set.primitiveLock = true;
   assert.equal(validatePlan(raw).operations[0].set.primitiveLock, true);
 });
+
+test('layout and relayout choose one coherent default batch up to one hundred operations', () => {
+  const holes = count => Array.from({ length: count }, (_, index) => ({
+    id: `hole-${index}`,
+    type: 'hole.create',
+    position: [index * 2, 0],
+    hole: { type: 'ROUND', diameter: 1 },
+  }));
+  const small = basePlan(holes(37));
+  small.phase = 'layout';
+  delete small.options;
+  delete small.constraints.boardBounds;
+  assert.equal(validatePlan(small).options.batchSize, 37);
+  const large = basePlan(holes(120));
+  large.phase = 'relayout';
+  delete large.options;
+  delete large.constraints.boardBounds;
+  assert.equal(validatePlan(large).options.batchSize, 100);
+});
+
+test('routing keeps a conservative default while an explicit large batch is honored', () => {
+  const raw = basePlan([{ id: 'line', type: 'line.create', net: 'SIG', layer: 'TOP', start: [1, 1], end: [4, 1], width: 0.2 }]);
+  delete raw.options;
+  assert.equal(validatePlan(raw).options.batchSize, 24);
+  raw.options = { batchSize: 80, saveAfterBatch: true };
+  assert.equal(validatePlan(raw).options.batchSize, 80);
+});
