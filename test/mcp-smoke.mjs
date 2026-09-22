@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const packageVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
 const exactTarget = { windowId: 'window-smoke', projectUuid: 'project-smoke', documentUuid: 'pcb-doc-smoke' };
 const expectedDefault = [
   'pcb_audit_geometry',
@@ -64,7 +66,7 @@ const expectedLegacy = [
 const expectedDiagnostics = ['pcb_capture_snapshot', 'pcb_compare_snapshots', 'pcb_realtime_drc'].sort();
 
 async function connectProfile(profile) {
-  const client = new Client({ name: `easyeda-pcb-mcp-smoke-${profile}`, version: '2.4.8' });
+  const client = new Client({ name: `easyeda-pcb-mcp-smoke-${profile}`, version: packageVersion });
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: ['src/server.mjs'],
@@ -141,12 +143,12 @@ try {
   assert.deepEqual(diagnosticNames, expectedDiagnostics);
 
   await new Promise(resolve => setTimeout(resolve, 25));
-  assert.match(production.stderr(), /easyeda-pcb 2\.4\.8 profile=default tools=21/);
-  assert.match(legacy.stderr(), /easyeda-pcb 2\.4\.8 profile=legacy tools=30/);
-  assert.match(diagnostics.stderr(), /easyeda-pcb 2\.4\.8 profile=diagnostics tools=3/);
+  assert.match(production.stderr(), new RegExp(`easyeda-pcb ${packageVersion.replaceAll('.', '\\.')} profile=default tools=21`));
+  assert.match(legacy.stderr(), new RegExp(`easyeda-pcb ${packageVersion.replaceAll('.', '\\.')} profile=legacy tools=30`));
+  assert.match(diagnostics.stderr(), new RegExp(`easyeda-pcb ${packageVersion.replaceAll('.', '\\.')} profile=diagnostics tools=3`));
   process.stdout.write(`${JSON.stringify({
     ok: true,
-    version: '2.4.8',
+    version: packageVersion,
     profiles: { default: names, legacy: legacyNames, diagnostics: diagnosticNames },
   }, null, 2)}\n`);
 } finally {

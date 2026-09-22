@@ -1,6 +1,6 @@
 {
   "name": "easyeda-pcb-mcp",
-  "version": "2.4.8",
+  "version": "2.4.10",
   "private": true,
   "type": "module",
   "description": "Explicit EasyEDA Pro PCB layout and routing operations over the existing local Bridge",

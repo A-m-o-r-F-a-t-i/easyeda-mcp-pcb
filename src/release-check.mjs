@@ -17,7 +17,7 @@ export async function verifyApiGates({ target, expectedSchematicUuid, drcDetailL
     limit: netlistDetailLimit,
     bridgeUrl,
   });
-  const drc = await saveAndCheck({ target, bridgeUrl, save: false, runDrc: true });
+  const drc = await saveAndCheck({ target, bridgeUrl, save: false, runDrc: true, drcDetailLimit });
   const after = await prepareSchematicSync({ target, bridgeUrl });
 
   const stateStableAcrossChecks = before.digest === after.digest;
@@ -53,13 +53,18 @@ export async function verifyApiGates({ target, expectedSchematicUuid, drcDetailL
       afterCounts: after.counts,
     },
     drc: {
+      state: drc.drcState,
+      jobId: drc.drcJobId,
       verified: drc.drcVerified,
       passed: drc.drcPassed,
       total: drc.drcErrorCount,
       detailLimit: drcDetailLimit,
-      items: Array.isArray(drc.drcItems) ? drc.drcItems.slice(0, drcDetailLimit) : [],
-      hasMore: drcDetailLimit < drc.drcErrorCount,
+      offset: drc.drcItemsOffset ?? 0,
+      items: Array.isArray(drc.drcItems) ? drc.drcItems : [],
+      hasMore: drc.drcItemsHasMore === true,
+      nextOffset: drc.drcItemsNextOffset ?? null,
       summary: drc.drcSummary,
+      nextAction: drc.nextAction ?? null,
     },
     netlist: {
       stableReads: netlist.stableReads,

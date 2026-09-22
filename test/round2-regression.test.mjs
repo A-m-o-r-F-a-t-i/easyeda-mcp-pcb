@@ -19,4 +19,19 @@ test('R206 text plan cannot rename electrical Designator identity',()=>{const {t
 test('R207 unacknowledged static repour retains every target as unverified',async()=>{const e={...base(),pcb_PrimitivePour:{getAll:async()=>[{primitiveId:'p1'}],rebuildCopperRegions:async()=>undefined},pcb_PrimitivePoured:{getAll:async()=>[{primitiveId:'f1',pourPrimitiveId:'p1',pourFills:[[]]}]}};const r=await pcbToolsRuntime(e,{target,kind:'rebuildPours'});assert.deepEqual(r.unverifiedRebuildIds,['p1'])});
 test('R208 attribute identity changes are not classified as purely visual',()=>{const b={document:doc,units:'mil',attributes:[{primitiveId:'a1',parentPrimitiveId:'c1',key:'Designator',value:'R1'}]};const a=structuredClone(b);a.attributes[0].value='UART';const r=compareSnapshots(b,a);assert.equal(r.sensitiveAttributeChangeCount,1)});
 test('R209 missing metadata coverage remains explicit',()=>{const s={document:doc,units:'mil',lines:[]};const r=compareSnapshots(s,s);assert.deepEqual(r.missingData,['netlist','layers','constraints'])});
-test('R210 invalid verbose DRC response cannot return verified zero errors',async()=>{const original=globalThis.fetch;globalThis.fetch=async(url,options)=>{let body;if(String(url).endsWith('/health'))body={service:'easyeda-bridge',edaConnected:true};else if(String(url).endsWith('/eda-windows'))body={windows:[{windowId:target.windowId,connected:true}]};else{const code=JSON.parse(options.body).code;body={success:true,windowId:target.windowId,result:code.includes('pcb_Drc.check')?false:{document:doc}}}return new Response(JSON.stringify(body))};try{await assert.rejects(saveAndCheck({target,bridgeUrl:'http://127.0.0.1:49620',save:false}),/DRC.*array|invalid.*DRC/i)}finally{globalThis.fetch=original}});
+test('R210 invalid verbose DRC response cannot return verified zero errors',async()=>{
+ const original=globalThis.fetch;
+ globalThis.fetch=async(url,options)=>{
+  let body;
+  if(String(url).endsWith('/health'))body={service:'easyeda-bridge',edaConnected:true};
+  else if(String(url).endsWith('/eda-windows'))body={windows:[{windowId:target.windowId,connected:true}]};
+  else{
+   const code=JSON.parse(options.body).code;
+   const invalid=code.includes('const nativeResult=eda.pcb_Drc.check');
+   body={success:true,windowId:target.windowId,result:invalid?{state:'FAILED',jobId:'bad-job',nativeCallStarted:true,error:{code:'INVALID_VERBOSE_DRC_RESPONSE',message:'Native verbose DRC did not return an array'}}:{document:doc}};
+  }
+  return new Response(JSON.stringify(body));
+ };
+ try{await assert.rejects(saveAndCheck({target,bridgeUrl:'http://127.0.0.1:49620',save:false}),/DRC.*array|invalid.*DRC/i)}
+ finally{globalThis.fetch=original}
+});

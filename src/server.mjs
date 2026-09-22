@@ -10,7 +10,7 @@ import { runGuardedNative } from './execution-context.mjs';
 import { exportPcb } from './export.mjs';
 import { readRouteScene } from './route-scene.mjs';
 import { auditPcb, statusPcb, synchronizePcb } from './production-tools.mjs';
-export const VERSION = '2.4.8';
+export const VERSION = '2.4.10';
 import { captureSnapshot, inspectPinmap } from './verification.mjs';
 import { inspectAllSilkscreen } from './silkscreen-all.mjs';
 import { exportNativeBackup, captureView } from './backup.mjs';
@@ -297,15 +297,21 @@ server.registerTool('pcb_import_schematic_changes', {
 
 server.registerTool('pcb_save_and_drc', {
   title: 'Save PCB and run native DRC',
-  description: 'Validate the exact PCB target, save the document and optionally run EasyEDA native DRC. This is a finalization/verification tool; DRC does not validate thermal current capacity, signal integrity or visual quality.',
+  description: 'Validate the exact PCB target, optionally save it, and run EasyEDA verbose native DRC as a resumable job. A completed response returns the full violation count and rule/category/layer summaries plus a bounded detail page; it never duplicates the full native tree. RUNNING returns drcJobId for save=false continuation. Operational completion is separate from whether violations exist.',
   annotations: {readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:false},
   inputSchema: {
     target: targetSchema,
     bridgeUrl: bridgeUrlSchema,
-    save: z.boolean().optional().default(true),
+    save: z.boolean().optional().describe('Defaults to true for a new check and false when drcJobId continues an existing check'),
     runDrc: z.boolean().optional().default(true),
+    drcJobId: z.string().min(1).max(160).optional().describe('Continue one RUNNING or COMPLETED DRC job; continuation must use save=false'),
+    drcWaitMs: z.number().int().min(0).max(45000).optional().default(15000).describe('Maximum time to wait in this call before returning RUNNING'),
+    drcPollIntervalMs: z.number().int().min(100).max(2000).optional().default(300),
+    drcDetailOffset: z.number().int().min(0).optional().default(0),
+    drcDetailLimit: z.number().int().min(0).max(250).optional().default(100),
+    releaseDrcJob: z.boolean().optional().default(false).describe('Delete retained native results after this completed page is produced'),
   },
-}, async ({ target, bridgeUrl, save, runDrc }) => handled(() => saveAndCheck({ target, bridgeUrl, save, runDrc })));
+}, async args => handled(() => saveAndCheck(args)));
 
 server.registerTool('pcb_verify_api_gates', {
   title: 'Run a stable read-only PCB API verification gate',
@@ -314,7 +320,7 @@ server.registerTool('pcb_verify_api_gates', {
   inputSchema: {
     target: targetSchema,
     expectedSchematicUuid: z.string().min(1).optional(),
-    drcDetailLimit: z.number().int().min(0).max(1000).optional().default(100),
+    drcDetailLimit: z.number().int().min(0).max(250).optional().default(100),
     netlistDetailLimit: z.number().int().min(0).max(1000).optional().default(100),
     bridgeUrl: bridgeUrlSchema,
   },
@@ -474,7 +480,7 @@ const descriptions = {
   pcb_audit_geometry: 'Inspect supplied or live copper geometry and optional connectivity. Unmodeled copper and pad geometry keep connectivity explicitly partial.',
   pcb_inspect_pinmap: 'Read stable component pin numbers/nets and canonical pad hole dimensions. Raw footprint hole fields stay traceable; physicalDrill distinguishes real multi-layer drills from inactive SMD hole state.',
   pcb_inspect_silkscreen: 'Inspect visible text and component attributes for size, overlap and clipping; unavailable bounds remain unknown.',
-  pcb_save_and_drc: 'Save the guarded PCB and/or run verbose native DRC, reporting operational success separately from violations.',
+  pcb_save_and_drc: 'Save the guarded PCB and/or run resumable verbose native DRC. Completed calls return full counts and summaries with paged violation details; RUNNING calls return drcJobId for continuation.',
   pcb_verify_api_gates: 'Run a stable read-only combination of snapshots, associated netlist comparison and native DRC.',
   pcb_render_inspection_svg: 'Create a deterministic board or region SVG from native geometry; disclose missing drawing categories.',
   pcb_capture_inspection_view: 'Capture the exact current PCB viewport to a new PNG; temporary enabled-layer isolation is restored and verified.',
@@ -525,7 +531,12 @@ function buildDefaultRegistry() {
     snapshot: z.object({ units: z.enum(['mil', 'mm']), lines: z.array(z.unknown()).max(30000), pads: z.array(z.unknown()).max(30000).optional(), vias: z.array(z.unknown()).max(30000).optional(), arcs: z.array(z.unknown()).optional(), fills: z.array(z.unknown()).optional(), poured: z.array(z.unknown()).optional(), regions: z.array(z.unknown()).optional(), coverage: z.unknown().optional() }).strict().optional(),
     checks: z.array(z.enum(['geometry', 'connectivity'])).min(1).max(2).optional(), net: z.string().optional(), nativeUnroutedCount: z.number().int().min(0).optional(),
   }, args => handled(() => auditPcb(args)));
-  change('pcb_save_and_drc', { ...registry.get('pcb_save_and_drc').definition.inputSchema, expected: expectedSchema.optional(), executionId: executionFields.executionId }, args => handled(() => args.save === false ? saveAndCheck(args) : runGuardedNative(args, () => saveAndCheck(args))));
+  change('pcb_save_and_drc', { ...registry.get('pcb_save_and_drc').definition.inputSchema, expected: expectedSchema.optional(), executionId: executionFields.executionId }, args => handled(() => {
+    const effectiveSave = args.save ?? !args.drcJobId;
+    const request = { ...args, save: effectiveSave };
+    if (args.drcJobId && effectiveSave) return saveAndCheck(request);
+    return effectiveSave ? runGuardedNative(request, () => saveAndCheck(request)) : saveAndCheck(request);
+  }));
   registry.set('pcb_export', { name: 'pcb_export', definition: {
     title: 'Export native backup, routing scene or manufacturing data', description: descriptions.pcb_export,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },

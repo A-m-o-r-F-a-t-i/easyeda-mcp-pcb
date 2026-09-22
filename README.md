@@ -1,8 +1,10 @@
-# EasyEDA PCB MCP 2.4.8
+# EasyEDA PCB MCP 2.4.10
 
-Typed PCB tools over a local EasyEDA Pro Bridge, exposed as a compact 21-tool production profile plus diagnostics and legacy compatibility profiles. The executor applies explicit design decisions, reads actual results and rejects stale targets or old-state assertions. Version 2.4.8 fixes the live-client component cleanup adapter: EasyEDA keeps the component `Designator` attribute as mandatory identity even when its generic delete API reports success, so the guarded operation now removes the reference-designator silkscreen presentation by setting both visibility fields false while preserving the attribute ID/value, component identity, geometry, ordinary strings and non-designator attributes. Version 2.4.7 introduced the guarded two-stage cleanup and portable SDK registry tests. True native circular board outlines, closed polygon outlines, standalone PTH/NPTH round or slot objects, networked terminal pads, `boardDelta`, machine-readable `workflowReceipt`, exact-operation `recoveryDirective` and resumable partial batches remain supported. The service does not expose automatic placement, path search, automatic routing, route clearing, order placement, arbitrary JavaScript or whole-rule-table overwrite.
+Typed PCB tools over a local EasyEDA Pro Bridge, exposed as a compact 21-tool production profile plus diagnostics and legacy compatibility profiles. The executor applies explicit design decisions, reads actual results and rejects stale targets or old-state assertions. Version 2.4.9 makes verbose native DRC resumable and bounded: the EasyEDA window retains the native result under a job ID, the MCP returns `RUNNING` instead of timing out, and completed calls return full counts and category/rule/object/layer summaries with paged native violation details instead of duplicating the complete native tree. Invalid, missing, expired or failed native results remain explicitly unverified. Version 2.4.8 fixed the live-client component cleanup adapter while preserving mandatory `Designator` identity. True native circular board outlines, closed polygon outlines, standalone PTH/NPTH round or slot objects, networked terminal pads, `boardDelta`, machine-readable `workflowReceipt`, exact-operation `recoveryDirective` and resumable partial batches remain supported. The service does not expose automatic placement, path search, automatic routing, route clearing, order placement, arbitrary JavaScript or whole-rule-table overwrite.
 
 ## Installation and verification
+
+Version 2.4.10 keeps timed-out DRC jobs terminal even when a native callback arrives late, distinguishes an unavailable native API from a failed invocation, and records synchronous checker attempts correctly. Both DRC entry points accept at most 250 detail items per page; complete totals remain independent of the requested page.
 
 Requires Node.js >=22, an already authorized local EasyEDA Bridge and an explicitly selected PCB. Install locked dependencies and run:
 
@@ -34,7 +36,7 @@ The MCP owns execution and data verification. `easyeda-pcb-layout-routing` owns 
 | `pcb_cleanup_components` | Preflight or execute one guarded bulk cleanup that unlocks components and removes only the visible reference-designator silkscreen. It preserves the mandatory attached `Designator` attribute ID/value, ordinary strings, non-designator attributes, component identity and geometry. |
 | `pcb_rebuild_pours` | Native repour plus actual fill association, missing/unverified fills and non-target fill-change reporting. |
 | `pcb_read_constraints`, `pcb_manage_constraint_group` | Canonical rules and guarded net-class, differential, equal-length and pad-pair operations. |
-| `pcb_realtime_drc`, `pcb_save_and_drc`, `pcb_verify_api_gates` | Native status/control and full DRC. The read-only gate brackets DRC and source-netlist comparison with stable PCB digests; a pass still requires visual, topology, current, SI, mechanical and manufacturing review. |
+| `pcb_realtime_drc`, `pcb_save_and_drc`, `pcb_verify_api_gates` | Native status/control and resumable verbose DRC. `COMPLETED` reports the full violation total and summaries with a bounded detail page; `RUNNING` returns `drcJobId` for `save=false` continuation. The read-only gate still requires visual, topology, current, SI, mechanical and manufacturing review. |
 | `pcb_prepare_schematic_sync`, `pcb_import_schematic_changes` | Associated source, stable PCB digest, guarded import and before/after readback. No selective native ECO preview. |
 | `pcb_audit_geometry` | Straight-segment directions and ordinary/pad/via/branch joints. No electrical or thermal approval. |
 | `pcb_inspect_silkscreen` | Default page inspection; `scope="all"` compares all selected visible BBoxes across pages after two consistent full reads. |
@@ -142,7 +144,7 @@ These are version-specific live observations, not universal SDK guarantees.
 
 ## Tests and live regression
 
-`npm test` runs the current offline/synthetic regression suite, including closed-outline, standalone-pad, physical-drill, partial-continuation and board-delta cases. `npm run smoke` verifies the real stdio protocol and the 20-tool production, 29-tool legacy and 3-tool diagnostics profiles. Neither command certifies every parameter combination in an actual editor.
+`npm test` runs the current offline/synthetic regression suite, including closed-outline, standalone-pad, physical-drill, partial-continuation and board-delta cases. `npm run smoke` verifies the real stdio protocol and the 21-tool production, 30-tool legacy and 3-tool diagnostics profiles. Neither command certifies every parameter combination in an actual editor.
 
 The opt-in `test/live-read-probe.mjs`, `test/live-write-probe.mjs` and `test/live-eco-probe.mjs` use an explicit target JSON and existing output directory. The write/ECO probes require the `--disposable-board` argument and must only run on an authorized disposable board with a verified native backup. Read the script first. Test evidence includes failures and cleanup, not just successful calls.
 
@@ -156,7 +158,7 @@ The live PCB-side reference-difference fixture observed native success with no r
 
 ## 1.6: stable logical pin goals and data quality
 
-The current profiles expose 20 production tools, 29 legacy compatibility tools and 3 diagnostics tools. `expectedAfter.pads` accepts either `{primitiveId, net}` or `{componentUniqueId, padNumber, net}`. The logical selector resolves the current source-linked component and explicit pad-parent relationship. Ambiguous source identities, missing associations, duplicate physical IDs and inconsistent multi-shape logical pin nets do not pass. Unknown, repeated or contradictory goals are rejected before Bridge access.
+The 1.6 profiles exposed 20 production tools, 29 legacy compatibility tools and 3 diagnostics tools. `expectedAfter.pads` accepts either `{primitiveId, net}` or `{componentUniqueId, padNumber, net}`. The logical selector resolves the current source-linked component and explicit pad-parent relationship. Ambiguous source identities, missing associations, duplicate physical IDs and inconsistent multi-shape logical pin nets do not pass. Unknown, repeated or contradictory goals are rejected before Bridge access.
 
 Snapshots reject invalid netlist/layer results and duplicate standalone pads. `coverage.metadataComplete` separates metadata quality from primitive-category coverage. Comparison returns `unverifiedData`, `completeComparison` and nullable `fullSnapshotUnchanged`; equal failed reads never establish complete-snapshot equality. All-silkscreen inspection rejects missing explicitly requested IDs.
 

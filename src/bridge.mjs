@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { buildBatchCode, buildReadCode } from './runtime.mjs';
 import { planSummary, validatePlan } from './plan.mjs';
-import { summarizeDrcReport } from './drc-report.mjs';
+import { buildDrcStartCode, buildDrcStatusCode, createDrcJobId, waitForDrcJob } from './drc-job.mjs';
 
 const MIN_PORT = 49620;
 const MAX_PORT = 49629;
@@ -195,20 +195,159 @@ export async function executePlanSource(source, { bridgeUrl = null } = {}) {
   };
 }
 
-export async function saveAndCheck({ target, bridgeUrl = null, save = true, runDrc = true }) {
+export async function saveAndCheck({
+  target,
+  bridgeUrl = null,
+  save,
+  runDrc = true,
+  drcJobId = null,
+  drcWaitMs = 15000,
+  drcPollIntervalMs = 300,
+  drcDetailOffset = 0,
+  drcDetailLimit = 100,
+  releaseDrcJob = false,
+}) {
   if (!target?.documentUuid) fail('target.documentUuid is required');
+  if (drcJobId != null && (typeof drcJobId !== 'string' || !drcJobId.trim())) fail('drcJobId must be a non-empty string');
+  if (!Number.isSafeInteger(drcDetailOffset) || drcDetailOffset < 0) fail('drcDetailOffset must be a non-negative integer');
+  if (!Number.isSafeInteger(drcDetailLimit) || drcDetailLimit < 0 || drcDetailLimit > 250) fail('drcDetailLimit must be an integer from 0 to 250');
+  if (!Number.isSafeInteger(drcWaitMs) || drcWaitMs < 0 || drcWaitMs > 45000) fail('drcWaitMs must be an integer from 0 to 45000');
+  if (!Number.isSafeInteger(drcPollIntervalMs) || drcPollIntervalMs < 100 || drcPollIntervalMs > 2000) fail('drcPollIntervalMs must be an integer from 100 to 2000');
+  if (typeof releaseDrcJob !== 'boolean') fail('releaseDrcJob must be boolean');
+  const resuming = drcJobId != null;
+  const shouldSave = save ?? !resuming;
+  if (resuming && shouldSave) fail('A DRC continuation must use save=false so the checked board cannot be changed before result retrieval');
+  if (!runDrc && resuming) fail('drcJobId requires runDrc=true');
+
   assertAllowedTarget(target);
   const bridge = await resolveBridge({ bridgeUrl, windowId: target.windowId, requireEda: true });
   const status = await executeBridgeCode(bridge, buildReadCode({ kind: 'status', target }));
   let saved = null;
-  if (save) saved = await saveDocument(bridge, target);
-  let drc = null;
-  if (runDrc) {
-    const code = `const d=await eda.dmt_SelectControl.getCurrentDocumentInfo();if(d?.uuid!==${JSON.stringify(target.documentUuid)}||d?.documentType!==3)throw new Error('PCB document/type mismatch before DRC');if(${JSON.stringify(target.projectUuid ?? null)}&&(await eda.dmt_Project.getCurrentProjectInfo())?.uuid!==${JSON.stringify(target.projectUuid ?? null)})throw new Error('PCB project mismatch before DRC');return await eda.pcb_Drc.check(true,false,true);`;
-    drc = executionContextFor(target) ? (await contextRpc('pcb.drc')).result : await executeBridgeCode(bridge, code, 120_000);
-    if (!Array.isArray(drc)) fail('Invalid verbose DRC response: expected an error array', {responseType:typeof drc,response:drc,saved});
-    await executeBridgeCode(bridge, buildReadCode({kind:'status',target}));
+  if (shouldSave) saved = await saveDocument(bridge, target);
+
+  if (!runDrc) {
+    return {
+      ok: true,
+      bridge: { baseUrl: bridge.baseUrl, windowId: bridge.windowId },
+      status,
+      saved,
+      drcState: 'NOT_REQUESTED',
+      drcJobId: null,
+      drcVerified: false,
+      drcOperationalSuccess: null,
+      drcErrorCount: null,
+      drcPassed: null,
+      drcItems: null,
+      drcSummary: null,
+      rawNativeDrcOmitted: true,
+    };
   }
-  const report = runDrc ? summarizeDrcReport(drc) : null;
-  return { ok: true, bridge: { baseUrl: bridge.baseUrl, windowId: bridge.windowId }, status, saved, drc, drcVerified:report?.verified??false, drcErrorCount:report?.total??null, drcPassed:report?report.total===0:null, drcItems:report?.items??null, drcSummary:report?{topLevelCount:report.topLevelCount,groupCount:report.groupCount,countsByCategory:report.countsByCategory,countsByRule:report.countsByRule}:null };
+
+  let effectiveJobId = drcJobId ?? createDrcJobId();
+  const readJob = () => executeBridgeCode(bridge, buildDrcStatusCode({
+    target,
+    jobId: effectiveJobId,
+    offset: drcDetailOffset,
+    limit: drcDetailLimit,
+    release: releaseDrcJob,
+  }), 20_000);
+  let initial;
+  if (resuming) initial = await readJob();
+  else initial = await executeBridgeCode(bridge, buildDrcStartCode({ target, jobId: effectiveJobId }), 20_000);
+  if (typeof initial?.jobId === 'string' && initial.jobId) effectiveJobId = initial.jobId;
+  const jobReused = initial?.reused === true || resuming;
+  if (initial?.state === 'COMPLETED' && !initial.report) initial = await readJob();
+  const job = await waitForDrcJob({
+    initial,
+    poll: readJob,
+    waitMs: drcWaitMs,
+    pollIntervalMs: drcPollIntervalMs,
+  });
+
+  if (job?.state === 'RUNNING') {
+    return {
+      ok: true,
+      bridge: { baseUrl: bridge.baseUrl, windowId: bridge.windowId },
+      status,
+      saved,
+      drcState: 'RUNNING',
+      drcJobId: effectiveJobId,
+      drcJobReused: jobReused,
+      drcStartedAt: job.startedAt ?? null,
+      drcCompletedAt: null,
+      drcDurationMs: null,
+      nativeDrcStarted: job.nativeCallStarted === true,
+      nativeDrcCompleted: false,
+      drcVerified: false,
+      drcOperationalSuccess: null,
+      drcErrorCount: null,
+      drcPassed: null,
+      drcItems: null,
+      drcSummary: null,
+      rawNativeDrcOmitted: true,
+      nextAction: { tool: 'pcb_save_and_drc', arguments: { target, save: false, runDrc: true, drcJobId: effectiveJobId, drcDetailOffset, drcDetailLimit } },
+    };
+  }
+
+  if (job?.state !== 'COMPLETED' || job?.report?.verified !== true) {
+    const error = new Error(job?.error?.message ?? `Native DRC job ended in state ${String(job?.state ?? 'UNKNOWN')}`);
+    error.code = job?.error?.code ?? 'NATIVE_DRC_UNVERIFIED';
+    error.details = {
+      drcState: job?.state ?? 'UNKNOWN',
+      drcJobId: effectiveJobId,
+      nativeDrcStarted: job?.nativeCallStarted === true,
+      startedAt: job?.startedAt ?? null,
+      completedAt: job?.completedAt ?? null,
+      durationMs: job?.durationMs ?? null,
+      nativeError: job?.error ?? null,
+      saved,
+    };
+    throw error;
+  }
+
+  const report = job.report;
+  const statusAfterDrc = await executeBridgeCode(bridge, buildReadCode({ kind: 'status', target }));
+  const summary = {
+    topLevelCount: report.topLevelCount,
+    groupCount: report.groupCount,
+    visitedNodes: report.visitedNodes,
+    visibleFindingCount: report.visibleFindingCount,
+    hiddenFindingCount: report.hiddenFindingCount,
+    countsByCategory: report.countsByCategory,
+    countsByRule: report.countsByRule,
+    countsByObjectType: report.countsByObjectType,
+    countsByLayer: report.countsByLayer,
+    countsByErrorType: report.countsByErrorType,
+    countsByRuleType: report.countsByRuleType,
+  };
+  return {
+    ok: true,
+    bridge: { baseUrl: bridge.baseUrl, windowId: bridge.windowId },
+    status,
+    statusAfterDrc,
+    saved,
+    drcState: 'COMPLETED',
+    drcJobId: effectiveJobId,
+    drcJobReused: jobReused,
+    drcJobReleased: job.released === true,
+    drcStartedAt: job.startedAt ?? null,
+    drcCompletedAt: job.completedAt ?? null,
+    drcDurationMs: job.durationMs ?? null,
+    nativeDrcStarted: job.nativeCallStarted === true,
+    nativeDrcCompleted: true,
+    drcOperationalSuccess: true,
+    drcVerified: true,
+    drcErrorCount: report.total,
+    drcPassed: report.total === 0,
+    drcItems: report.items,
+    drcItemsOffset: report.page.offset,
+    drcItemsLimit: report.page.limit,
+    drcItemsReturned: report.page.returned,
+    drcItemsHasMore: report.page.hasMore,
+    drcItemsNextOffset: job.released === true ? null : report.page.nextOffset,
+    drcDetailsComplete: report.page.detailsComplete,
+    drcDetailsDiscarded: job.released === true && report.page.hasMore,
+    drcSummary: summary,
+    rawNativeDrcOmitted: job.rawNativeReportOmitted === true,
+  };
 }
