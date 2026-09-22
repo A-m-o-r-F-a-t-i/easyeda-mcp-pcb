@@ -88,7 +88,8 @@ test('O08 circular outline rejects polygon mixing, nonpositive diameter and boun
 test('O08B new board outlines use the coordinate origin as a circle center or polygon vertex',()=>{
  const circle=rawCirclePlan();circle.operations[0].position=[1,0];assert.throws(()=>validatePlan(circle),/coordinate origin/);
  const rectangle=compiled(),scale=1/0.0254;assert.deepEqual(rectangle.operations[0].polygon.slice(0,7),[0,0,'L',10*scale,0,10*scale,10*scale]);
- const irregular=rawPlan();irregular.operations[0].points=[[0,0],[9,0],[8,3],[5,7],[0,5]];assert.doesNotThrow(()=>validatePlan(irregular));
+ const irregular=rawPlan();irregular.operations[0].points=[[9,0],[8,3],[5,7],[0,5],[0,0]];assert.doesNotThrow(()=>validatePlan(irregular));
+ const centeredButUnanchored=rawPlan();centeredButUnanchored.constraints.boardBounds={minX:-6,minY:-6,maxX:6,maxY:6};centeredButUnanchored.operations[0].points=[[-5,-5],[5,-5],[5,5],[-5,5]];assert.throws(()=>validatePlan(centeredButUnanchored),/explicit polygon vertex/);
  const unanchored=rawPlan();unanchored.operations[0].points=[[1,1],[10,1],[10,10],[1,10]];assert.throws(()=>validatePlan(unanchored),/explicit polygon vertex/);
  assert.ok(planSummary(compiled()).checks.includes('new board outline anchored to coordinate origin'));
 });
@@ -96,7 +97,7 @@ test('O08B new board outlines use the coordinate origin as a circle center or po
 test('O08C polygon outline modification keeps the same origin-vertex anchor rule',()=>{
  const modify={
   schema:'easyeda-pcb-plan/v2',intent:'replace polygon outline',target,units:'mm',phase:'layout',constraints:{boardBounds:{minX:0,minY:0,maxX:12,maxY:12}},
-  operations:[{id:'outline-mod',type:'polyline.modify',primitiveId:'outline-old',expected:{net:'',layer:11,lineWidth:0.1,primitiveLock:true},expectedPoints:[[0,0],[10,0],[10,10],[0,10]],set:{},points:[[0,0],[9,0],[8,3],[5,7],[0,5]]}],
+  operations:[{id:'outline-mod',type:'polyline.modify',primitiveId:'outline-old',expected:{net:'',layer:11,lineWidth:0.1,primitiveLock:true},expectedPoints:[[0,0],[10,0],[10,10],[0,10]],set:{},points:[[9,0],[8,3],[5,7],[0,5],[0,0]]}],
  };
  assert.doesNotThrow(()=>validatePlan(modify));
  modify.operations[0].points=[[1,1],[10,1],[10,10],[1,10]];
