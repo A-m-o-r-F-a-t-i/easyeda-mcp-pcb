@@ -7,13 +7,13 @@ const component = (primitiveId, designator, primitiveLock) => ({
   primitiveId,
   uniqueId: `uid-${primitiveId}`,
   designator,
-  x: primitiveId === 'c1' ? 10 : 20,
+  x: primitiveId === 'c1' ? 10 : primitiveId === 'c2' ? 20 : 30,
   y: 30,
   rotation: 0,
   layer: 1,
   primitiveLock,
 });
-const attribute = (primitiveId, parentPrimitiveId, key, value, primitiveLock = false) => ({
+const attribute = (primitiveId, parentPrimitiveId, key, value, primitiveLock = false, valueVisible = true, keyVisible = false) => ({
   primitiveId,
   parentPrimitiveId,
   layer: 3,
@@ -21,8 +21,8 @@ const attribute = (primitiveId, parentPrimitiveId, key, value, primitiveLock = f
   y: 30,
   key,
   value,
-  keyVisible: false,
-  valueVisible: true,
+  keyVisible,
+  valueVisible,
   fontFamily: 'default',
   fontSize: 32,
   lineWidth: 6,
@@ -54,12 +54,14 @@ function fixture() {
   const components = new Map([
     ['c1', component('c1', 'U1', true)],
     ['c2', component('c2', 'R1', false)],
+    ['c3', component('c3', 'C1', false)],
   ]);
   const attributes = new Map([
     ['a1', attribute('a1', 'c1', 'Designator', 'U1', true)],
     ['a2', attribute('a2', 'c1', 'Value', 'MCU')],
     ['a3', attribute('a3', 'missing-parent', 'Designator', 'ORPHAN')],
     ['a4', attribute('a4', 'c2', 'Designator', 'R1')],
+    ['a5', attribute('a5', 'c3', 'Designator', 'C1', false, false, false)],
   ]);
   const strings = new Map([['s1', string('s1', 'UART1 5V / TX / RX / GND')]]);
   let writes = 0;
@@ -72,10 +74,7 @@ function fixture() {
       values.set(id, next);
       return structuredClone(next);
     },
-    delete: async id => {
-      writes++;
-      return values.delete(id);
-    },
+    delete: async () => { throw new Error('cleanup must not delete component identity attributes'); },
   });
   return {
     components,
@@ -92,12 +91,15 @@ function fixture() {
   };
 }
 
-test('bulk cleanup unlocks components and deletes only attached Designator attributes', async () => {
+test('bulk cleanup unlocks components and removes only attached Designator silkscreen display', async () => {
   const value = fixture();
   const preview = await componentCleanupRuntime(value.eda, { target, mode: 'preview' });
   assert.equal(preview.preview.counts.lockedComponents, 1);
-  assert.equal(preview.preview.counts.designatorAttributes, 2);
-  assert.deepEqual(preview.preview.designatorAttributeIds, ['a1', 'a4']);
+  assert.equal(preview.preview.counts.designatorAttributes, 3);
+  assert.equal(preview.preview.counts.visibleDesignatorAttributes, 2);
+  assert.equal(preview.preview.counts.hiddenDesignatorAttributes, 1);
+  assert.deepEqual(preview.preview.designatorAttributeIds, ['a1', 'a4', 'a5']);
+  assert.deepEqual(preview.preview.visibleDesignatorAttributeIds, ['a1', 'a4']);
   const preservedString = structuredClone(value.strings.get('s1'));
   const preservedValue = structuredClone(value.attributes.get('a2'));
   const preservedOrphan = structuredClone(value.attributes.get('a3'));
@@ -114,12 +116,21 @@ test('bulk cleanup unlocks components and deletes only attached Designator attri
   assert.equal(result.completedCount, 3);
   assert.equal(value.components.get('c1').primitiveLock, false);
   assert.equal(value.components.get('c2').primitiveLock, false);
-  assert.equal(value.attributes.has('a1'), false);
-  assert.equal(value.attributes.has('a4'), false);
+  assert.equal(value.attributes.has('a1'), true);
+  assert.equal(value.attributes.has('a4'), true);
+  assert.equal(value.attributes.has('a5'), true);
+  assert.equal(value.attributes.get('a1').keyVisible, false);
+  assert.equal(value.attributes.get('a1').valueVisible, false);
+  assert.equal(value.attributes.get('a1').primitiveLock, false);
+  assert.equal(value.attributes.get('a4').keyVisible, false);
+  assert.equal(value.attributes.get('a4').valueVisible, false);
+  assert.equal(value.attributes.get('a5').valueVisible, false);
   assert.deepEqual(value.attributes.get('a2'), preservedValue);
   assert.deepEqual(value.attributes.get('a3'), preservedOrphan);
   assert.deepEqual(value.strings.get('s1'), preservedString);
   assert.equal(result.verification.componentIdentityAndGeometryUnchanged, true);
+  assert.equal(result.verification.componentDesignatorIdentityPreserved, true);
+  assert.equal(result.verification.allComponentDesignatorSilkscreenRemoved, true);
   assert.equal(result.verification.independentStringsUnchanged, true);
 });
 
@@ -165,5 +176,5 @@ test('serialized cleanup runtime is self-contained', async () => {
   assert.doesNotMatch(code, /node:/);
   const result = await new Function('eda', `return (async()=>{${code}})();`)(value.eda);
   assert.equal(result.ok, true);
-  assert.equal(result.preview.counts.components, 2);
+  assert.equal(result.preview.counts.components, 3);
 });

@@ -43,17 +43,21 @@ export async function componentCleanupRuntime(eda, job) {
     if (stringIds.has(null) || stringIds.size !== strings.length) throw new Error('String identity is missing or duplicated');
     const lockedComponents = components.filter(item => item.primitiveLock === true);
     const designatorAttributes = attributes.filter(item => item.key === 'Designator' && componentIds.has(item.parentPrimitiveId));
+    const visibleDesignatorAttributes = designatorAttributes.filter(item => item.keyVisible === true || item.valueVisible === true);
     return {
       components,
       attributes,
       strings,
       lockedComponentIds: lockedComponents.map(item => item.primitiveId),
       designatorAttributeIds: designatorAttributes.map(item => item.primitiveId),
+      visibleDesignatorAttributeIds: visibleDesignatorAttributes.map(item => item.primitiveId),
       counts: {
         components: components.length,
         lockedComponents: lockedComponents.length,
         attributes: attributes.length,
         designatorAttributes: designatorAttributes.length,
+        visibleDesignatorAttributes: visibleDesignatorAttributes.length,
+        hiddenDesignatorAttributes: designatorAttributes.length - visibleDesignatorAttributes.length,
         independentStrings: strings.length,
       },
     };
@@ -87,36 +91,29 @@ export async function componentCleanupRuntime(eda, job) {
     }
 
     if (deleteReferenceDesignators) {
-      if (!attributeApi?.get || !attributeApi?.modify || !attributeApi?.delete) throw new Error('Attribute modify/delete API unavailable');
-      const designatorIds = new Set(before.designatorAttributeIds);
-      for (const expected of before.attributes.filter(item => designatorIds.has(item.primitiveId))) {
+      if (!attributeApi?.get || !attributeApi?.modify) throw new Error('Attribute modify API unavailable');
+      const visibleDesignatorIds = new Set(before.visibleDesignatorAttributeIds);
+      for (const expected of before.attributes.filter(item => visibleDesignatorIds.has(item.primitiveId))) {
         await guard();
         let current = await attributeApi.get(expected.primitiveId);
-        if (!current || !same(plain(current, attributeFields), expected)) throw new Error(`Designator attribute ${expected.primitiveId} changed before delete`);
-        if (expected.primitiveLock === true) {
-          const returned = await attributeApi.modify(expected.primitiveId, { primitiveLock: false });
-          current = await attributeApi.get(state(returned, 'primitiveId') || expected.primitiveId);
-          const unlocked = { ...expected, primitiveLock: false };
-          if (!current || !same(plain(current, attributeFields), unlocked)) throw new Error(`Designator attribute ${expected.primitiveId} unlock failed readback`);
-          expected.primitiveLock = false;
-        }
+        if (!current || !same(plain(current, attributeFields), expected)) throw new Error(`Designator attribute ${expected.primitiveId} changed before silkscreen removal`);
+        const desired = { ...expected, keyVisible: false, valueVisible: false, primitiveLock: false };
         await guard();
-        current = await attributeApi.get(expected.primitiveId);
-        if (!current || !same(plain(current, attributeFields), expected)) throw new Error(`Designator attribute ${expected.primitiveId} changed during delete preflight`);
-        const deleted = await attributeApi.delete(expected.primitiveId);
-        if (!deleted) throw new Error(`Designator attribute ${expected.primitiveId} delete returned false`);
-        await guard();
-        if (await attributeApi.get(expected.primitiveId)) throw new Error(`Designator attribute ${expected.primitiveId} remains after delete`);
-        results.push({ type: 'attribute.delete-designator', status: 'deleted', primitiveId: expected.primitiveId, parentPrimitiveId: expected.parentPrimitiveId, value: expected.value, verified: true });
+        const returned = await attributeApi.modify(expected.primitiveId, { keyVisible: false, valueVisible: false, primitiveLock: false });
+        current = await attributeApi.get(state(returned, 'primitiveId') || expected.primitiveId);
+        if (!current || !same(plain(current, attributeFields), desired)) throw new Error(`Designator attribute ${expected.primitiveId} silkscreen removal failed readback`);
+        results.push({ type: 'attribute.remove-designator-silkscreen', status: 'hidden', primitiveId: expected.primitiveId, parentPrimitiveId: expected.parentPrimitiveId, value: expected.value, verified: true });
       }
     }
 
     const after = await collect();
     const expectedComponents = before.components.map(item => unlockComponents ? { ...item, primitiveLock: false } : item);
-    const removed = new Set(deleteReferenceDesignators ? before.designatorAttributeIds : []);
-    const expectedAttributes = before.attributes.filter(item => !removed.has(item.primitiveId));
+    const hidden = new Set(deleteReferenceDesignators ? before.visibleDesignatorAttributeIds : []);
+    const expectedAttributes = before.attributes.map(item => hidden.has(item.primitiveId)
+      ? { ...item, keyVisible: false, valueVisible: false, primitiveLock: false }
+      : item);
     if (!same(after.components, expectedComponents)) throw new Error('Component identity or geometry changed outside lock cleanup');
-    if (!same(after.attributes, expectedAttributes)) throw new Error('Non-designator attributes changed during cleanup');
+    if (!same(after.attributes, expectedAttributes)) throw new Error('Attribute identity or presentation changed outside requested designator silkscreen removal');
     if (!same(after.strings, before.strings)) throw new Error('Independent silkscreen strings changed during cleanup');
     return {
       ok: true,
@@ -127,7 +124,8 @@ export async function componentCleanupRuntime(eda, job) {
       afterCounts: after.counts,
       verification: {
         allComponentsUnlocked: !unlockComponents || after.lockedComponentIds.length === 0,
-        allComponentDesignatorsDeleted: !deleteReferenceDesignators || after.designatorAttributeIds.length === 0,
+        allComponentDesignatorSilkscreenRemoved: !deleteReferenceDesignators || after.visibleDesignatorAttributeIds.length === 0,
+        componentDesignatorIdentityPreserved: true,
         independentStringsUnchanged: true,
         nonDesignatorAttributesUnchanged: true,
         componentIdentityAndGeometryUnchanged: true,

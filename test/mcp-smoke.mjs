@@ -64,7 +64,7 @@ const expectedLegacy = [
 const expectedDiagnostics = ['pcb_capture_snapshot', 'pcb_compare_snapshots', 'pcb_realtime_drc'].sort();
 
 async function connectProfile(profile) {
-  const client = new Client({ name: `easyeda-pcb-mcp-smoke-${profile}`, version: '2.4.7' });
+  const client = new Client({ name: `easyeda-pcb-mcp-smoke-${profile}`, version: '2.4.8' });
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: ['src/server.mjs'],
@@ -141,12 +141,12 @@ try {
   assert.deepEqual(diagnosticNames, expectedDiagnostics);
 
   await new Promise(resolve => setTimeout(resolve, 25));
-  assert.match(production.stderr(), /easyeda-pcb 2\.4\.7 profile=default tools=21/);
-  assert.match(legacy.stderr(), /easyeda-pcb 2\.4\.7 profile=legacy tools=30/);
-  assert.match(diagnostics.stderr(), /easyeda-pcb 2\.4\.7 profile=diagnostics tools=3/);
+  assert.match(production.stderr(), /easyeda-pcb 2\.4\.8 profile=default tools=21/);
+  assert.match(legacy.stderr(), /easyeda-pcb 2\.4\.8 profile=legacy tools=30/);
+  assert.match(diagnostics.stderr(), /easyeda-pcb 2\.4\.8 profile=diagnostics tools=3/);
   process.stdout.write(`${JSON.stringify({
     ok: true,
-    version: '2.4.7',
+    version: '2.4.8',
     profiles: { default: names, legacy: legacyNames, diagnostics: diagnosticNames },
   }, null, 2)}\n`);
 } finally {

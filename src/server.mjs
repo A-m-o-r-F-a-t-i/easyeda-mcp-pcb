@@ -10,7 +10,7 @@ import { runGuardedNative } from './execution-context.mjs';
 import { exportPcb } from './export.mjs';
 import { readRouteScene } from './route-scene.mjs';
 import { auditPcb, statusPcb, synchronizePcb } from './production-tools.mjs';
-export const VERSION = '2.4.7';
+export const VERSION = '2.4.8';
 import { captureSnapshot, inspectPinmap } from './verification.mjs';
 import { inspectAllSilkscreen } from './silkscreen-all.mjs';
 import { exportNativeBackup, captureView } from './backup.mjs';
@@ -429,7 +429,7 @@ const expectedSchema = z.object({
 }).strict();
 const guardSchema = z.object({ schema: z.literal('easyeda-pcb-guard/v1'), planSha256: z.string().regex(/^[0-9a-f]{64}$/), target: exactTargetSchema, expected: expectedSchema }).strict();
 const componentCleanupGuardSchema = z.object({
-  schema: z.literal('easyeda-pcb-component-cleanup-guard/v1'),
+  schema: z.literal('easyeda-pcb-component-cleanup-guard/v2'),
   target: exactTargetSchema,
   expected: expectedSchema,
   previewSha256: z.string().regex(/^[0-9a-f]{64}$/),
@@ -437,8 +437,8 @@ const componentCleanupGuardSchema = z.object({
 }).strict();
 const executionFields = { expected: expectedSchema, executionId: z.string().min(1).max(160).optional() };
 server.registerTool('pcb_cleanup_components', {
-  title: 'Unlock components and delete reference-designator silkscreen',
-  description: 'Preflight or execute one guarded bulk cleanup: leave all components movable and delete only component Designator attributes. Component identity/geometry, ordinary strings and non-Designator attributes are independently verified unchanged.',
+  title: 'Unlock components and remove reference-designator silkscreen',
+  description: 'Preflight or execute one guarded bulk cleanup: leave all components movable and remove the visible silkscreen presentation of component Designator attributes. The mandatory Designator identity, component geometry, ordinary strings and non-Designator attributes are independently verified unchanged.',
   annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
   inputSchema: {
     target: exactTargetSchema,
@@ -465,7 +465,7 @@ const descriptions = {
   pcb_pick: 'Find native PCB objects by a point or rectangle without changing selection; coordinates require explicit units.',
   pcb_execute_plan: 'Execute guarded PCB geometry with independent readback. Circular outlines use shape=CIRCLE, position and diameter; polygon approximation is not accepted. Partial or unknown outcomes return exact suffix-only recovery instructions.',
   pcb_execute_text_plan: 'Validate, prepare or execute a text/attribute plan. Execution requires its prepared guard and independently verifies written text.',
-  pcb_cleanup_components: 'Preflight or execute guarded bulk cleanup: unlock all components and delete only component Designator attributes while preserving component identity, geometry, ordinary strings and all other attributes.',
+  pcb_cleanup_components: 'Preflight or execute guarded bulk cleanup: unlock all components and remove component reference-designator silkscreen while preserving mandatory Designator identity, geometry, ordinary strings and all other attributes.',
   pcb_rebuild_pours: 'Rebuild selected or all copper pours, read actual fill results and optionally save. Partial rebuilding may affect other fills on client 3.2.186.',
   pcb_read_constraints: 'Read native rule tables and network, differential-pair, equal-length and pad-pair groups.',
   pcb_manage_constraint_group: 'Change one constraint group with expected old values and independent readback; optionally save the PCB.',

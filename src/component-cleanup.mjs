@@ -4,7 +4,7 @@ import { contextRpc, contextVerifiedPublicWrite, executionContextFor, runGuarded
 import { buildComponentCleanupCode } from './component-cleanup-runtime.mjs';
 import { createWorkflowReceipt } from './workflow-receipt.mjs';
 
-const GUARD_SCHEMA = 'easyeda-pcb-component-cleanup-guard/v1';
+const GUARD_SCHEMA = 'easyeda-pcb-component-cleanup-guard/v2';
 
 function normalizeOptions(input) {
   const options = {
@@ -16,7 +16,7 @@ function normalizeOptions(input) {
 }
 
 function previewDigest(preview, options) {
-  return hashObject({ schema: 'easyeda-pcb-component-cleanup-preview/v1', options, preview });
+  return hashObject({ schema: 'easyeda-pcb-component-cleanup-preview/v2', options, preview });
 }
 
 function assertGuard(guard, target, options) {
@@ -34,11 +34,13 @@ function cleanupSummary(preview, options) {
     componentCount: preview.counts.components,
     lockedComponentCount: options.unlockComponents ? preview.counts.lockedComponents : 0,
     designatorAttributeCount: options.deleteReferenceDesignators ? preview.counts.designatorAttributes : 0,
+    visibleDesignatorSilkscreenCount: options.deleteReferenceDesignators ? preview.counts.visibleDesignatorAttributes : 0,
+    alreadyHiddenDesignatorCount: options.deleteReferenceDesignators ? preview.counts.hiddenDesignatorAttributes : 0,
     preservedIndependentStringCount: preview.counts.independentStrings,
     preservedNonDesignatorAttributeCount: preview.counts.attributes - preview.counts.designatorAttributes,
     plannedChangeCount:
       (options.unlockComponents ? preview.counts.lockedComponents : 0) +
-      (options.deleteReferenceDesignators ? preview.counts.designatorAttributes : 0),
+      (options.deleteReferenceDesignators ? preview.counts.visibleDesignatorAttributes : 0),
   };
 }
 
@@ -93,7 +95,8 @@ export async function cleanupComponents(request) {
         results: [],
         verification: {
           allComponentsUnlocked: !options.unlockComponents || previewResult.preview.counts.lockedComponents === 0,
-          allComponentDesignatorsDeleted: !options.deleteReferenceDesignators || previewResult.preview.counts.designatorAttributes === 0,
+          allComponentDesignatorSilkscreenRemoved: !options.deleteReferenceDesignators || previewResult.preview.counts.visibleDesignatorAttributes === 0,
+          componentDesignatorIdentityPreserved: true,
           independentStringsUnchanged: true,
           nonDesignatorAttributesUnchanged: true,
           componentIdentityAndGeometryUnchanged: true,
@@ -138,7 +141,7 @@ export async function cleanupComponents(request) {
       }, {}),
       changedByKind: {
         component: result.results.filter(item => item.type === 'component.unlock').length,
-        attribute: result.results.filter(item => item.type === 'attribute.delete-designator').length,
+        attribute: result.results.filter(item => item.type === 'attribute.remove-designator-silkscreen').length,
       },
       changedOperationIds: result.results.map(item => `${item.type}:${item.primitiveId}`),
       unchangedOperationIds: [],
