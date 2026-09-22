@@ -1,0 +1,11 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {evaluateSyncExpectations} from '../src/sync-expectations.mjs';
+const snapshot={components:[{primitiveId:'c1',uniqueId:'source1',designator:'C25',name:'100nF'}],pads:[{primitiveId:'p1',net:'GND'}]};
+test('E01 absent ECO goals are explicitly unverified, not implicitly passed',()=>{assert.equal(evaluateSyncExpectations(snapshot).verified,null)});
+test('E02 exact component reference and pad net goals pass',()=>{const r=evaluateSyncExpectations(snapshot,{components:[{uniqueId:'source1',designator:'C25'}],pads:[{primitiveId:'p1',net:'GND'}]});assert.equal(r.verified,true);assert.equal(r.checks.length,2)});
+test('E03 successful native import with an unchanged wrong reference fails the goal',()=>{const changed=structuredClone(snapshot);changed.components[0].designator='C90001';const r=evaluateSyncExpectations(changed,{components:[{uniqueId:'source1',designator:'C25'}]});assert.equal(r.verified,false);assert.equal(r.unmet[0].actual[0].designator,'C90001')});
+test('E04 duplicate source IDs are not resolved by arbitrary selection',()=>{const ambiguous=structuredClone(snapshot);ambiguous.components.push({...ambiguous.components[0],primitiveId:'c2'});assert.equal(evaluateSyncExpectations(ambiguous,{components:[{uniqueId:'source1'}]}).verified,false)});
+test('E05 expected component removal requires actual absence',()=>{assert.equal(evaluateSyncExpectations(snapshot,{components:[{uniqueId:'source1',present:false}]}).verified,false);assert.equal(evaluateSyncExpectations(snapshot,{components:[{uniqueId:'absent',present:false}]}).verified,true)});
+test('E06 wrong or missing pad networks remain explicit unmet goals',()=>{const r=evaluateSyncExpectations(snapshot,{pads:[{primitiveId:'p1',net:'5V'},{primitiveId:'missing',net:'GND'}]});assert.equal(r.unmet.length,2)});
+test('E07 malformed goals and unavailable snapshot categories fail instead of empty success',()=>{assert.throws(()=>evaluateSyncExpectations(snapshot,{}),/nonempty/);assert.throws(()=>evaluateSyncExpectations({}, {pads:[{primitiveId:'p1',net:'GND'}]}),/unavailable/)});

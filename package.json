@@ -1,0 +1,19 @@
+{
+  "name": "easyeda-pcb-mcp",
+  "version": "2.4.6",
+  "private": true,
+  "type": "module",
+  "description": "Explicit EasyEDA Pro PCB layout and routing operations over the existing local Bridge",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "test": "node --test test/*.test.mjs",
+    "smoke": "node test/mcp-smoke.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "zod": "4.6.4"
+  }
+}
