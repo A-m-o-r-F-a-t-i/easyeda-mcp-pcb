@@ -18,7 +18,7 @@ async function reply(fn){
  catch(e){const data={ok:false,error:{code:e.code??'REQUEST_FAILED',message:String(e.message??e),details:e.details??null}};return {isError:true,content:[{type:'text',text:JSON.stringify(data)}],structuredContent:data};}
 }
 function unwrap(value){if(value.structuredContent)return value.structuredContent;const text=value.content?.find(x=>x.type==='text')?.text;if(text){try{return JSON.parse(text);}catch{}}return value;}
-const viewFields={...common,outputPath:z.string().optional(),units:z.enum(['mm','mil']).default('mm'),region:region.optional(),side:z.enum(['top','bottom','both']).default('top'),layers:z.array(z.number().int()).optional(),nets:z.array(z.string()).optional(),pinLabels:z.boolean().default(true)};
+const viewFields={...common,outputPath:z.string().optional(),units:z.enum(['mm','mil']).default('mm'),region:region.optional(),side:z.enum(['top','bottom','both']).default('top'),fit:z.enum(['board','all']).default('board'),layers:z.array(z.number().int()).optional(),nets:z.array(z.string()).optional(),pinLabels:z.boolean().default(true)};
 export function createSimpleRegistry(previous){
  const registry=new Map();
  const add=(name,description,inputSchema,fn,readOnly=true)=>registry.set(name,{name,definition:{title:name,description,inputSchema,annotations:{readOnlyHint:readOnly,destructiveHint:!readOnly,idempotentHint:readOnly,openWorldHint:false}},handler:args=>reply(()=>fn(args))});

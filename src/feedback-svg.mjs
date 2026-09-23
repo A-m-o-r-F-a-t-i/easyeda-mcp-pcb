@@ -48,16 +48,27 @@ export function renderFeedbackSvg(scene,options={}){
   }
  }
  for(const v of scene.vias??[]){const r=v.diameter/2;add({...v,layer:12},{minX:v.x-r,maxX:v.x+r,minY:v.y-r,maxY:v.y+r},`<circle cx="${f(v.x)}" cy="${f(v.y)}" r="${f(r)}" fill="#b2a2db" stroke-width="0.7"/><circle cx="${f(v.x)}" cy="${f(v.y)}" r="${f(v.holeDiameter/2)}" fill="#15181e" stroke-width="0.6"/>`);}
- const bounds=region??merge(allBounds);if(!bounds)throw Error('No geometry is available for this view');
+ const outlineBounds=merge((scene.polylines??[]).filter(o=>o.layer===11).flatMap(o=>parseComplexPolygon(o.polygon??o.complexPolygon).map(p=>p.bounds)));
+ const bounds=region??(options.fit==='all'?null:outlineBounds)??merge(allBounds);if(!bounds)throw Error('No geometry is available for this view');
+ const within=p=>p.x>=Math.min(mx*bounds.minX,mx*bounds.maxX)&&p.x<=Math.max(mx*bounds.minX,mx*bounds.maxX)&&p.y>=-bounds.maxY&&p.y<=-bounds.minY;
+ for(let i=labels.length-1;i>=0;i--)if(!within(labels[i]))labels.splice(i,1);
+ for(let i=pinLabels.length-1;i>=0;i--)if(!within(pinLabels[i]))pinLabels.splice(i,1);
  const margin=options.marginMil??40,font=options.fontMil??18;
  const x0=(mx===1?bounds.minX:-bounds.maxX)-margin,x1=(mx===1?bounds.maxX:-bounds.minX)+margin,y0=-bounds.maxY-margin,y1=-bounds.minY+margin;
  const legendX=x1+font*2,rowHeight=font*1.5;
  pinLabels.sort((a,b)=>a.y-b.y||a.x-b.x||a.text.localeCompare(b.text));
- const width=x1-x0+(pinLabels.length?Math.max(250,...pinLabels.map(x=>x.text.length*font*0.6))+font*3:0),height=Math.max(y1-y0,pinLabels.length*rowHeight+2*font);
+ const dense=pinLabels.length>24,columns=dense?Math.min(4,Math.ceil(pinLabels.length/18)):1,rows=Math.ceil(pinLabels.length/columns),columnWidth=Math.max(250,...pinLabels.map(x=>(x.text.length+5)*font*0.6));
+ const width=dense?Math.max(x1-x0,columns*columnWidth+font*2):x1-x0+(pinLabels.length?columnWidth+font*3:0);
+ const height=dense?y1-y0+(rows+2)*rowHeight:Math.max(y1-y0,pinLabels.length*rowHeight+2*font);
  const text=labels.map(l=>`<text data-primitive-id="${esc(l.id)}" x="${f(l.x)}" y="${f(l.y)}" font-size="${font}" text-anchor="middle" fill="#f5f5f5" stroke="#15181e" stroke-width="2" paint-order="stroke">${esc(l.text)}</text>`);
- for(let i=0;i<pinLabels.length;i++){const p=pinLabels[i],y=y0+font+i*rowHeight;text.push(`<g data-primitive-id="${esc(p.id)}" data-net="${esc(p.net)}"><path d="M ${f(p.x)} ${f(p.y)} L ${f(legendX-font)} ${f(y)}" stroke="#a6afbe" stroke-opacity="0.55" stroke-width="0.6" fill="none"/><circle cx="${f(p.x)}" cy="${f(p.y)}" r="2" fill="#f2bd50"/><text x="${f(legendX)}" y="${f(y)}" font-size="${font}" fill="#e6ebf2">${esc(p.text)}</text></g>`);}
- for(const s of scene.strings??[])if(visible(s.layer)&&Number.isFinite(s.x)&&Number.isFinite(s.y)&&intersects({minX:s.x,maxX:s.x,minY:s.y,maxY:s.y},region))text.push(`<text data-primitive-id="${esc(s.primitiveId)}" x="${f(mx*s.x)}" y="${f(-s.y)}" font-size="${f(s.fontSize??font)}" transform="rotate(${f(-(s.rotation??0)*mx)} ${f(mx*s.x)} ${f(-s.y)})" fill="#cbd3df">${esc(s.text)}</text>`);
- const metadata={schema:'easyeda-pcb-feedback-svg/v3',document:scene.document,sourceUnits:'mil',side,observation:side==='bottom'?'bottom view mirrored once about board Y axis':'top view',pinLabelCount:pinLabels.length,componentLabelCount:labels.length,coverage:scene.coverage,omitted,notes:['Dashed component boxes are native graphical BBoxes, not physical bodies.','Labels and leader lines are inspection overlays; they are not written to PCB silkscreen.']};
+ for(let i=0;i<pinLabels.length;i++){
+  const p=pinLabels[i];
+  if(dense){const x=x0+font+Math.floor(i/rows)*columnWidth,y=y1+rowHeight+(i%rows)*rowHeight;
+   text.push(`<g data-primitive-id="${esc(p.id)}" data-net="${esc(p.net)}"><text x="${f(p.x)}" y="${f(p.y)}" font-size="${f(font*0.55)}" text-anchor="middle" fill="#fff" stroke="#15181e" stroke-width="1" paint-order="stroke">${i+1}</text><text x="${f(x)}" y="${f(y)}" font-size="${font}" fill="#e6ebf2">${i+1}: ${esc(p.text)}</text></g>`);
+  }else{const y=y0+font+i*rowHeight;text.push(`<g data-primitive-id="${esc(p.id)}" data-net="${esc(p.net)}"><path d="M ${f(p.x)} ${f(p.y)} L ${f(legendX-font)} ${f(y)}" stroke="#a6afbe" stroke-opacity="0.55" stroke-width="0.6" fill="none"/><circle cx="${f(p.x)}" cy="${f(p.y)}" r="2" fill="#f2bd50"/><text x="${f(legendX)}" y="${f(y)}" font-size="${font}" fill="#e6ebf2">${esc(p.text)}</text></g>`);}
+ }
+ for(const s of scene.strings??[])if(visible(s.layer)&&Number.isFinite(s.x)&&Number.isFinite(s.y)&&within({x:mx*s.x,y:-s.y}))text.push(`<text data-primitive-id="${esc(s.primitiveId)}" x="${f(mx*s.x)}" y="${f(-s.y)}" font-size="${f(s.fontSize??font)}" transform="rotate(${f(-(s.rotation??0)*mx)} ${f(mx*s.x)} ${f(-s.y)})" fill="#cbd3df">${esc(s.text)}</text>`);
+ const metadata={schema:'easyeda-pcb-feedback-svg/v3',document:scene.document,sourceUnits:'mil',side,fit:region?'region':options.fit==='all'?'all':'board',observation:side==='bottom'?'bottom view mirrored once about board Y axis':'top view',pinLabelCount:pinLabels.length,pinLabelLayout:dense?'indexed-grid':'leaders',legendColumns:columns,componentLabelCount:labels.length,componentsOutsideView:scene.components.filter(c=>!within({x:mx*c.x,y:-c.y})).map(c=>c.designator??c.primitiveId),coverage:scene.coverage,omitted,notes:['Dashed component boxes are native graphical BBoxes, not physical bodies.','Labels and leader lines are inspection overlays; they are not written to PCB silkscreen.']};
  const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="${Math.round(1600*height/width)}" viewBox="${f(x0)} ${f(y0)} ${f(width)} ${f(height)}"><title>PCB ${esc(side)} view</title><metadata>${esc(JSON.stringify(metadata))}</metadata><rect x="${f(x0)}" y="${f(y0)}" width="${f(width)}" height="${f(height)}" fill="#15181e"/><defs><clipPath id="board-view"><rect x="${f(mx===1?bounds.minX:-bounds.maxX)}" y="${f(-bounds.maxY)}" width="${f(bounds.maxX-bounds.minX)}" height="${f(bounds.maxY-bounds.minY)}"/></clipPath></defs><g clip-path="url(#board-view)"><g transform="scale(${mx},-1)">${shapes.join('')}</g></g><g font-family="Arial,Microsoft YaHei,sans-serif" dominant-baseline="middle">${text.join('')}</g></svg>`;
  return {svg,metadata,viewBox:{x:x0,y:y0,width,height},boardBounds:bounds};
 }

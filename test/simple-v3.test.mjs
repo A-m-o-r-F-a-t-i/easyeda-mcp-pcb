@@ -20,6 +20,11 @@ test('world-coordinate polygon pads are neither translated nor rotated twice',()
  assert.match(r.svg,/PAD.1 \/ SIG/);assert.doesNotMatch(r.svg,/translate\(110 210\)/);
 });
 let counter=0;
+test('dense pin legends use compact columns and board framing reports staging objects',()=>{
+ const pads=Array.from({length:84},(_,i)=>({primitiveId:'p'+i,padNumber:String(i),net:'N'+i,layer:1,x:20+(i%12)*20,y:20+Math.floor(i/12)*20,pad:['ELLIPSE',10,10]}));
+ const s={document:{uuid:'test'},components:[{primitiveId:'off',designator:'OFF',x:10000,y:10000,layer:1}],pads,polylines:[{primitiveId:'outline',layer:11,polygon:[0,0,'L',300,0,300,200,0,200,0,0]}],coverage:{passes:1}};
+ const r=renderFeedbackSvg(s,{pinLabels:true});assert.equal(r.metadata.pinLabelLayout,'indexed-grid');assert.equal(r.metadata.legendColumns,4);assert.ok(r.viewBox.height<1200);assert.deepEqual(r.metadata.componentsOutsideView,['OFF']);assert.ok(r.boardBounds.maxX<10000);
+});
 export function mockEda(count=2){
  const names={component:'Component',pad:'Pad',line:'Line',arc:'Arc',via:'Via',polyline:'Polyline',fill:'Fill',pour:'Pour',poured:'Poured',region:'Region',string:'String',attribute:'Attribute'};
  const stores=Object.fromEntries(Object.keys(names).map(k=>[k,new Map()]));
