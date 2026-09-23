@@ -1,7 +1,7 @@
 import { auditGeometry } from './audit.mjs';
 import { arcBounds, describeArc, pointToArcDistance } from './arc-geometry.mjs';
 // Explicit geometry only: no placement optimization and no path search.
-export const VERSION = '2.6.0';
+export const VERSION = '2.6.1';
 export const LAYERS = Object.freeze({ TOP:1, BOTTOM:2, TOP_SILKSCREEN:3, BOTTOM_SILKSCREEN:4, BOARD_OUTLINE:11, MULTI:12, ...Object.fromEntries(Array.from({length:30},(_,i)=>[`INNER_${i+1}`,15+i])) });
 export const COPPER = new Set(['TOP','BOTTOM',...Array.from({length:30},(_,i)=>`INNER_${i+1}`)]);
 const FIELDS = {

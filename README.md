@@ -1,6 +1,8 @@
-# EasyEDA PCB MCP 2.6.0
+# EasyEDA PCB MCP 2.6.1
 
 Typed PCB tools over a local EasyEDA Pro Bridge, exposed as a compact 21-tool production profile plus diagnostics and legacy compatibility profiles. The executor applies explicit design decisions, reads actual results and rejects stale targets or old-state assertions. Version 2.6.0 anchors each newly created outline to the coordinate origin: a circle uses `[0,0]` as its center, while a polygon includes `[0,0]` as an explicit vertex. Pads owned by different components may not overlap, even on the same net, and standalone pads or vias may not intrude into component pads. Same-side moves are preflighted; native side/layer transformations are checked from actual post-write pins and a detected collision triggers a verified component rollback. Placement-sensitive plans always use this collision-aware runtime. Layout and relayout plans with no explicit `batchSize` execute all expanded operations in one coherent batch when the count is at most 100; larger placement plans use batches of 100, while routing keeps the conservative default of 24. Native DRC remains required for body, courtyard, board-edge and manufacturing clearance. Resumable native DRC, cleanup of visible designators, true circular outlines, standalone PTH/NPTH objects, networked terminal pads, `boardDelta`, `workflowReceipt`, `recoveryDirective` and resumable partial batches remain supported. The service does not expose automatic placement, path search, automatic routing, route clearing, order placement, arbitrary JavaScript or whole-rule-table overwrite.
+
+Version 2.6.1 synchronizes package, documentation, and plugin-discovery metadata. Its 21-tool production behavior is unchanged from the verified 2.6.0 implementation.
 
 ## Functional groups and reliable execution
 
