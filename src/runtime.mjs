@@ -78,7 +78,7 @@ export async function readRuntime(eda, request) {
    data.components=components.map(serialize);
    const canonical=await canonicalPadMap();
    const pads=new Map();
-   for(const c of components){const componentId=state(c,'primitiveId');const pins=await eda.pcb_PrimitiveComponent.getAllPinsByPrimitiveId(componentId);if(!Array.isArray(pins))throw Error('Component pads unavailable: '+componentId);for(const p of pins){const value=reconcilePinHole(serialize(p),canonical);pads.set(componentId+':'+state(p,'primitiveId'),value);}}
+   for(const c of components){const componentId=state(c,'primitiveId');const pins=await eda.pcb_PrimitiveComponent.getAllPinsByPrimitiveId(componentId);if(!Array.isArray(pins))throw Error('Component pads unavailable: '+componentId);for(const p of pins){const value={...reconcilePinHole(serialize(p),canonical),parentPrimitiveId:componentId};pads.set(componentId+':'+state(p,'primitiveId'),value);}}
    for(const p of await eda.pcb_PrimitivePad.getAll()){const value=finalizePhysicalPad(serialize(p));const id=state(p,'primitiveId');if(![...pads.values()].some(x=>x.primitiveId===id))pads.set('standalone:'+id,value);}
    data.pads=[...pads.values()];
    for(const key of ['lines','arcs','fills','vias','pads','components'])data[key].sort((a,b)=>String(a.primitiveId).localeCompare(String(b.primitiveId)));
@@ -89,7 +89,7 @@ export async function readRuntime(eda, request) {
   const after=await eda.dmt_SelectControl.getCurrentDocumentInfo();if(after?.uuid!==doc?.uuid||after?.documentType!==3)throw Error('PCB switched during audit');
   if(request.target?.projectUuid){const p=await eda.dmt_Project.getCurrentProjectInfo();if(p?.uuid!==request.target.projectUuid)throw Error('PCB project changed during audit');}
   second.coverage={source:'two matching complete API reads',atomic:false,componentCount:second.components.length,componentPads:'getAllPinsByPrimitiveId plus standalone pads',excluded:[...second.missingOptional,'poured','strings','regions']};
-  delete second.missingOptional;delete second.components;return second;
+  delete second.missingOptional;return second;
  }
  if(request.kind==='pins'){if(!request.ids?.length)throw Error('pins requires explicit component IDs');const canonical=await canonicalPadMap();const out=[];for(const id of request.ids){const pins=await eda.pcb_PrimitiveComponent.getAllPinsByPrimitiveId(id);if(!Array.isArray(pins))throw Error('Component pads unavailable: '+id);out.push({componentId:id,pads:pins.map(p=>reconcilePinHole(serialize(p),canonical))});}return out;}
  if(request.kind==='layers')return await eda.pcb_Layer.getAllLayers();
@@ -251,7 +251,7 @@ export async function batchRuntime(eda, job, collisionFactory = createPadCollisi
   else all=await api.getAll(op.state.net);
   if(!Array.isArray(all))throw Error('Creation verification enumeration unavailable: '+op.kind);
   const found=all.filter(x=>matches(x,op.state,{standalonePadState:op.kind==='pad'})&&(!['pour','polyline','fill'].includes(op.kind)||equalSource(x,op.polygon)));
-  if(['pad','arc','fill'].includes(op.kind)&&found.length>1)throw Error('Duplicate exact geometry/properties: '+op.kind);
+  if(['pad','via','arc','fill','pour','polyline'].includes(op.kind)&&found.length>1)throw Error('Duplicate exact geometry/properties: '+op.kind);
   return found.length?found.map(id):null;
  };
  const copperLayerCount=async()=>{
@@ -267,6 +267,29 @@ export async function batchRuntime(eda, job, collisionFactory = createPadCollisi
     if (job.checkpoint) await job.checkpoint(results);
   try {
    await guard();
+   if(job.mode==='reconcile'){
+    if(op.kind==='stackup'){
+     const actual=await copperLayerCount();
+     const disposition=actual===op.set.copperLayerCount?'APPLIED':actual===op.expected.copperLayerCount?'PENDING':'CONFLICT';
+     results.push({id:op.id,disposition,actual:{copperLayerCount:actual},verified:true});continue;
+    }
+    if(op.type.endsWith('.create')){
+     const ids=await verifyCreate(op);
+     results.push({id:op.id,disposition:ids?'APPLIED':'PENDING',primitiveIds:ids??[],verified:true});continue;
+    }
+    const api=apiFor(op.kind),actual=await readOne(api,op.kind,op.primitiveId);
+    const sameExpected=value=>matches(value,op.expected,{standalonePadState:op.kind==='pad'})&&(!['fill','polyline'].includes(op.kind)||equalSource(value,op.expectedPolygon));
+    let disposition;
+    if(op.type.endsWith('.delete')){
+     if(actual)disposition=sameExpected(actual)?'PENDING':'CONFLICT';
+     else disposition=(await api.getAll()).some(sameExpected)?'CONFLICT':'APPLIED';
+    }else{
+     const desired={...op.expected,...op.set};
+     const sameDesired=actual&&matches(actual,desired,{standalonePadState:op.kind==='pad'})&&(!['fill','polyline'].includes(op.kind)||equalSource(actual,op.polygon??op.expectedPolygon));
+     disposition=sameDesired?'APPLIED':actual&&sameExpected(actual)?'PENDING':'CONFLICT';
+    }
+    results.push({id:op.id,disposition,primitiveId:op.primitiveId,actual:actual?plain(actual,op.kind):null,verified:true});continue;
+   }
    if(op.kind==='stackup'){
     const before=await copperLayerCount(),desired=op.set.copperLayerCount;
     if(before!==op.expected.copperLayerCount)throw Error('Old copper layer count assertion failed');

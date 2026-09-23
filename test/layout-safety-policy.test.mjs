@@ -10,7 +10,9 @@ test('placement-sensitive geometry always uses the collision-aware bridge runtim
   for (const kind of ['component', 'pad', 'via']) {
     assert.equal(requiresBridgeGeometryRuntime('geometry', [{ kind }]), true, kind);
   }
-  assert.equal(requiresBridgeGeometryRuntime('geometry', [{ kind: 'line' }]), false);
+  assert.equal(requiresBridgeGeometryRuntime('geometry', [{ kind: 'line', type: 'line.create' }]), true);
+  assert.equal(requiresBridgeGeometryRuntime('geometry', [{ kind: 'line', type: 'line.delete' }]), true);
+  assert.equal(requiresBridgeGeometryRuntime('text', [{ kind: 'line' }]), false);
   assert.equal(requiresBridgeGeometryRuntime('text', [{ kind: 'component' }]), false);
 });
 

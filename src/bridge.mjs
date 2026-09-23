@@ -133,6 +133,7 @@ export async function loadPlanSource({ planPath, plan }, {maxBytes=MAX_PLAN_BYTE
   if ((planPath == null) === (plan == null)) fail('Provide exactly one of planPath or plan');
   if (plan != null) {let serialized;try{serialized=JSON.stringify(plan);}catch{fail('Inline JSON source is not serializable');}if(typeof serialized!=='string')fail('Inline JSON source is not serializable');if(Buffer.byteLength(serialized,'utf8')>maxBytes)fail(`JSON source exceeds ${maxBytes} bytes`);return { source: 'inline', raw: plan };}
   if (typeof planPath !== 'string' || !planPath.trim()) fail('planPath must be a non-empty path');
+  if (!path.isAbsolute(planPath)) fail('planPath must be an absolute path; relative paths are not resolved against the MCP installation directory');
   const absolutePath = path.resolve(planPath);
   if (path.extname(absolutePath).toLowerCase() !== '.json') fail('planPath must point to a .json file');
   const stat = await fs.stat(absolutePath);

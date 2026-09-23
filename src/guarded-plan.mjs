@@ -1,4 +1,7 @@
-import { executeBridgeCode, loadPlanSource, validatePlanSource } from './bridge.mjs';
+import { expectedForRpc } from './execution-context.mjs';
+import { executeBridgeCode, loadPlanSource, validatePlanSource, readPcb } from './bridge.mjs';
+import { preflightGeometry, assertPreflightClear } from './copper-preflight.mjs';
+import { buildExplicitPlan, buildRemainingPlan, verifiedContiguousPrefix, executionLedger } from './plan-workflow.mjs';
 import { runKeepoutPlan } from './keepout.mjs';
 import { validateTextPlanSource } from './advanced.mjs';
 import { connectGateway, gatewayError, hashObject, prepareGatewayState } from './gateway-client.mjs';
@@ -14,7 +17,8 @@ export function assertGuardMatchesPlan(guard, raw, normalized) {
 }
 
 const changedStatuses = new Set(['created', 'modified', 'deleted']);
-const bridgeGeometryKinds = new Set(['arc', 'polyline', 'pad', 'fill', 'stackup', 'component', 'via']);
+// Pure-line suffixes use the same guarded, independently verified adapter as mixed geometry.
+const bridgeGeometryKinds = new Set(['line', 'arc', 'polyline', 'pad', 'fill', 'pour', 'stackup', 'component', 'via']);
 const padOverlapKinds = new Set(['component', 'pad', 'via']);
 
 export function requiresBridgeGeometryRuntime(kind, operations = []) {
@@ -106,10 +110,28 @@ export function continuationDetails(normalized, confirmedResults, failedOperatio
   };
 }
 
-/** One public plan tool, three explicit phases; validators and guard preparation remain internal. */
+const preparedChecks = new Map();
+const failedBatches = new Map();
+const preparedKey = (sha, expected) => JSON.stringify([sha,expected.generationId,expected.bridgeGenerationId,expected.changeEpoch,expected.sourceHash]);
+async function checkLivePlan(normalized,session,expected,bridgeUrl) {
+  const snapshot=(await readPcb({kind:'auditSnapshot',target:normalized.target},{bridgeUrl})).result;
+  await session.rpc('events.getState',{}, { expected: expectedForRpc(expected) });
+  return assertPreflightClear(preflightGeometry(normalized,snapshot));
+}
+/** Geometry-only read modes share the executor's identity and native geometry matching. */
 export async function runPlan(source, { kind = 'geometry', mode = 'execute', guard, executionId, bridgeUrl } = {}) {
-  if (!['geometry', 'text'].includes(kind) || !['validate', 'prepare', 'execute'].includes(mode)) throw gatewayError('INVALID_REQUEST', 'Unknown plan kind or mode');
+  if (!['geometry', 'text'].includes(kind) || !(kind==='geometry'?['build','reconcile','validate','prepare','execute']:['validate','prepare','execute']).includes(mode)) throw gatewayError('INVALID_REQUEST', 'Unknown plan kind or mode');
   const input = kind === 'geometry' ? await loadPlanSource(source) : null;
+  if(mode==='build'){
+    const target=input.raw?.target;
+    if(!target?.projectUuid||!target?.windowId||!target?.documentUuid)throw gatewayError('INVALID_REQUEST','Build requires the exact plan target');
+    const session=await connectGateway({target,bridgeUrl,requireV2:true}),expected=await prepareGatewayState(session);
+    const snapshot=(await readPcb({kind:'auditSnapshot',target},{bridgeUrl})).result;
+    const needed=[...new Set((input.raw.operations??[]).map(op=>String(op.type).split('.')[0]).filter(kind=>kind==='pour'||kind==='polyline').map(kind=>kind==='pour'?'pours':'polylines'))];
+    if(needed.length){const extra=(await readPcb({kind:'snapshot',include:needed,target},{bridgeUrl})).result;for(const key of needed){if(!Array.isArray(extra[key]))throw gatewayError('PLAN_CONSTRUCTION_FAILED','Required native inventory unavailable',{kind:key});snapshot[key]=extra[key];}}
+    await session.rpc('events.getState',{}, { expected: expectedForRpc(expected) });
+    return {ok:true,mode,source:input.source,...buildExplicitPlan(input.raw,snapshot),expected,boardProgressCredited:false};
+  }
   if (input?.raw?.schema === 'easyeda-pcb-keepout-plan/v1') return runKeepoutPlan(input, { mode, guard, executionId, bridgeUrl });
   const validated = kind === 'geometry' ? await validatePlanSource({ plan: input.raw }) : await validateTextPlanSource(source);
   if (input) validated.loaded = input;
@@ -117,6 +139,20 @@ export async function runPlan(source, { kind = 'geometry', mode = 'execute', gua
   const transport = kind === 'geometry' ? prepareGeometryTransport(loaded.raw) : null;
   const planSha256 = hashObject(loaded.raw);
   if (mode === 'validate') return { ok: true, mode, source: loaded.source, planSha256, summary, wrotePCB: false, workflowReceipt: createWorkflowReceipt({ mode }) };
+  if(mode==='reconcile'){
+    const session=await connectGateway({target:normalized.target,bridgeUrl,requireV2:true}),expected=await prepareGatewayState(session);
+    const job={mode:'reconcile',target:normalized.target,toleranceMil:normalized.options.toleranceMil,operations:normalized.operations};
+    const readPass=async()=>{const results=[];for(let offset=0;offset<job.operations.length;offset+=100){const response=await executeBridgeCode(session.bridge,buildBatchCode({...job,operations:job.operations.slice(offset,offset+100)}));if(!response?.ok)throw gatewayError('RECONCILIATION_UNVERIFIED','Native object reconciliation incomplete',{response});results.push(...response.results);}return {ok:true,results};};
+    const first=await readPass();
+    const second=await readPass();
+    if(!first?.ok||!second?.ok)throw gatewayError('RECONCILIATION_UNVERIFIED','Native object reconciliation was incomplete',{first,second});
+    if(JSON.stringify(first)!==JSON.stringify(second))throw gatewayError('CONCURRENT_CHANGE','Exact plan objects changed during reconciliation');
+    await session.rpc('events.getState',{}, { expected: expectedForRpc(expected) });
+    const remaining=buildRemainingPlan(loaded.raw,normalized,second.results),failed=failedBatches.get(planSha256);
+    let adaptiveBatch=null;
+    if(remaining.remainingPlan&&failed&&['REQUEST_TIMEOUT','RESPONSE_TOO_LARGE','FILE_TOO_LARGE'].includes(failed.code)&&failed.batchSize>1){const next=Math.max(1,Math.floor(failed.batchSize/2));remaining.remainingPlan.options={...remaining.remainingPlan.options,batchSize:next};adaptiveBatch={previous:failed.batchSize,next,reason:failed.code,scope:'only independently observed pending operations; no automatic replay'};}
+    return {ok:true,mode,source:loaded.source,target:normalized.target,planSha256,expected,...remaining,adaptiveBatch,observations:second.results,readOnly:true,wrotePCB:false,boardProgressCredited:false,saved:'NOT_EVALUATED',meaning:'APPLIED means matching current objects, not new writes by this call; prepare the returned remainder before execution'};
+  }
   if (mode === 'prepare') {
     const session = await connectGateway({ target: normalized.target, bridgeUrl, requireV2: true });
     if (kind === 'geometry' && normalized.operations.some(op => op.kind === 'via' && !op.type.endsWith('.delete'))) {
@@ -124,10 +160,19 @@ export async function runPlan(source, { kind = 'geometry', mode = 'execute', gua
       verifyNativeViaPrecision(normalized, capabilities.clientVersion);
     }
     const expected = await prepareGatewayState(session);
-    return { ok: true, mode, source: loaded.source, summary, wrotePCB: false, guard: { schema: 'easyeda-pcb-guard/v1', planSha256, target: session.target, expected }, eventCoverage: expected.eventCoverage, nativeTransaction: false, workflowReceipt: createWorkflowReceipt({ mode }) };
+    const preflight=kind==='geometry'?await checkLivePlan(normalized,session,expected,bridgeUrl):null;
+    if(preflight){const key=preparedKey(planSha256,expected);preparedChecks.set(key,{preflight,createdAt:Date.now()});while(preparedChecks.size>16)preparedChecks.delete(preparedChecks.keys().next().value);}
+    return { ok: true, mode, source: loaded.source, summary, preflight, wrotePCB: false, guard: { schema: 'easyeda-pcb-guard/v1', planSha256, target: session.target, expected }, eventCoverage: expected.eventCoverage, nativeTransaction: false, workflowReceipt: createWorkflowReceipt({ mode }) };
   }
   assertGuardMatchesPlan(guard, loaded.raw, normalized);
   return runGuardedNative({ target: guard.target, expected: guard.expected, executionId, bridgeUrl }, async () => {
+    let preflight=null;
+    if(kind==='geometry'){
+      const key=preparedKey(planSha256,guard.expected),cached=preparedChecks.get(key);
+      if(cached&&Date.now()-cached.createdAt<300000)preflight=cached.preflight;
+      else {const session=await connectGateway({target:guard.target,bridgeUrl,requireV2:true});preflight=await checkLivePlan(normalized,session,guard.expected,bridgeUrl);}
+      assertPreflightClear(preflight);preparedChecks.delete(key);
+    }
     if (kind === 'geometry' && normalized.operations.some(op => op.kind === 'via' && !op.type.endsWith('.delete'))) {
       const capabilities = (await contextRpc('system.capabilities', {})).result;
       verifyNativeViaPrecision(normalized, capabilities.clientVersion);
@@ -136,14 +181,17 @@ export async function runPlan(source, { kind = 'geometry', mode = 'execute', gua
     const useBridgeGeometryRuntime = requiresBridgeGeometryRuntime(kind, normalized.operations);
     const results = [];
     let batches = 0, saves = 0, circularReadbackObjects = 0;
+    const attemptedOperationIds=[];
     try {
       for (let offset = 0; offset < normalized.operations.length; offset += size) {
         const operations = normalized.operations.slice(offset, offset + size);
         let batchResult;
+        attemptedOperationIds.push(...operations.map(op=>op.id));
         if (useBridgeGeometryRuntime) {
           const adapter = await contextVerifiedPublicWrite('pcb.geometryLegacy', async (context, expected) => {
             const result = await executeBridgeCode(context.session.bridge, buildBatchCode({ target: normalized.target, toleranceMil: normalized.options.toleranceMil, operations }));
-            const observed = await prepareGatewayState(context.session);
+            let observed;
+            try{observed=await prepareGatewayState(context.session);}catch(error){error.details={...(error.details??{}),observedBatchResult:result,observedOperationIds:verifiedContiguousPrefix(operations,result?.results).map(r=>r.id)};throw error;}
             return { ok: true, sourceBefore: { sha256: expected.sourceHash }, sourceAfter: { sha256: observed.sourceHash }, batchResult: result };
           });
           batchResult = adapter.batchResult;
@@ -151,8 +199,8 @@ export async function runPlan(source, { kind = 'geometry', mode = 'execute', gua
           const response = await contextRpc(kind === 'geometry' ? 'pcb.applyGeometryBatch' : 'pcb.applyTextBatch', { plan: transport?.wirePlan ?? loaded.raw, operationOffset: offset, maxOperations: size }, { write: true });
           batchResult = response.result;
         }
-        const verifiedPrefix = Array.isArray(batchResult?.results) ? batchResult.results.filter(item => item?.verified === true) : [];
-        if (!batchResult?.ok || !Array.isArray(batchResult.results) || batchResult.results.some(item => item.verified !== true)) {
+        const verifiedPrefix = verifiedContiguousPrefix(operations,batchResult?.results);
+        if (!batchResult?.ok || verifiedPrefix.length!==operations.length) {
           results.push(...verifiedPrefix);
           if (verifiedPrefix.length && normalized.options.saveAfterBatch) { await contextRpc('pcb.save', {}, { write: true }); saves++; }
           const failedOperationId = batchResult?.error?.operationId ?? operations[verifiedPrefix.length]?.id ?? null;
@@ -168,6 +216,8 @@ export async function runPlan(source, { kind = 'geometry', mode = 'execute', gua
             ...continuationDetails(normalized, results, failedOperationId),
           });
         }
+        // Preserve the native verified prefix even when later circular checks or save fail.
+        results.push(...verifiedPrefix);
         if (transport?.circles.length) {
           const requests = circularReadbackRequests(operations, batchResult.results);
           for (const request of requests) {
@@ -181,18 +231,19 @@ export async function runPlan(source, { kind = 'geometry', mode = 'execute', gua
             }
           }
         }
-        results.push(...batchResult.results);
         batches++;
         if (normalized.options.saveAfterBatch) { await contextRpc('pcb.save', {}, { write: true }); saves++; }
       }
       if (!normalized.options.saveAfterBatch) { await contextRpc('pcb.save', {}, { write: true }); saves++; }
       const boardDelta = summarizeBoardDelta(normalized, results, []);
       const padOverlapGate = summarizePadOverlapGate(normalized, results);
-      return { ok: true, mode, source: loaded.source, planSha256, summary, completedOperationCount: results.length, batchCount: batches, saveCount: saves, boardDelta, padOverlapGate, workflowReceipt: createWorkflowReceipt({ mode, boardDelta }), ...(transport ? {constraintEnforcement:{...transport.enforcement, circularReadbackObjects}} : {}), requiresRepour: results.some(item => item.requiresRepour), requiresVisualReview: true, results };
+      return { ok: true, mode, source: loaded.source, planSha256, summary, preflight, completedOperationCount: results.length, batchCount: batches, saveCount: saves, executionLedger:executionLedger(normalized,results,[],attemptedOperationIds,'SAVED'), boardDelta, padOverlapGate, workflowReceipt: createWorkflowReceipt({ mode, boardDelta }), checkpoint:{target:normalized.target,phase:normalized.phase,confirmedOperationIds:results.map(r=>r.id),remainingOperationIds:[],saveCount:saves}, ...(transport ? {constraintEnforcement:{...transport.enforcement, circularReadbackObjects}} : {}), requiresRepour: results.some(item => item.requiresRepour), requiresVisualReview: true, results };
     } catch (error) {
+      failedBatches.set(planSha256,{batchSize:size,code:error.code});while(failedBatches.size>16)failedBatches.delete(failedBatches.keys().next().value);
+      error.details={...(error.details??{}),executionLedger:executionLedger(normalized,results,error.details?.observedOperationIds??[],attemptedOperationIds,'UNKNOWN_OR_PARTIAL'),saveCount:saves};
       const failedOperationId = error.details?.failedOperationId ?? error.details?.response?.error?.operationId ?? null;
       const failureCode = error.code === 'PAD_OVERLAP_BLOCKED' ? error.code : error.details?.response?.error?.code ?? null;
-      error.details = { ...(error.details ?? {}), padOverlapGate: error.details?.padOverlapGate ?? summarizePadOverlapGate(normalized, results, failureCode), ...continuationDetails(normalized, results, failedOperationId), confirmedBatchCount: batches, source: loaded.source, planSha256 };
+      error.details = { ...(error.details ?? {}), padOverlapGate: error.details?.padOverlapGate ?? summarizePadOverlapGate(normalized, results, failureCode), ...continuationDetails(normalized, results, failedOperationId), confirmedBatchCount: batches, source: loaded.source, planSha256, checkpoint:{target:normalized.target,phase:normalized.phase,confirmedOperationIds:results.map(r=>r.id),observedOperationIds:error.details?.observedOperationIds??[],requiresReconcile:true}, nextAction:'Call pcb_execute_plan mode=reconcile with the original plan; do not replay verified or observed writes. Prepare only the returned remainingPlan.' };
       throw error;
     }
   });

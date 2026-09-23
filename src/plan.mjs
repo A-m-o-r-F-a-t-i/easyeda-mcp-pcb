@@ -1,7 +1,7 @@
 import { auditGeometry } from './audit.mjs';
 import { arcBounds, describeArc, pointToArcDistance } from './arc-geometry.mjs';
 // Explicit geometry only: no placement optimization and no path search.
-export const VERSION = '2.5.1';
+export const VERSION = '2.6.0';
 export const LAYERS = Object.freeze({ TOP:1, BOTTOM:2, TOP_SILKSCREEN:3, BOTTOM_SILKSCREEN:4, BOARD_OUTLINE:11, MULTI:12, ...Object.fromEntries(Array.from({length:30},(_,i)=>[`INNER_${i+1}`,15+i])) });
 export const COPPER = new Set(['TOP','BOTTOM',...Array.from({length:30},(_,i)=>`INNER_${i+1}`)]);
 const FIELDS = {
@@ -19,6 +19,7 @@ const REQUIRED = {line:['net','layer','startX','startY','endX','endY','lineWidth
 const LENGTHS = new Set(['x','y','startX','startY','endX','endY','lineWidth','holeDiameter','diameter','holeOffsetX','holeOffsetY']);
 const PAD_TYPES = Object.freeze({NORMAL:0,TEST:1,MARK_POINT:2});
 const PAD_SHAPES = new Set(['ELLIPSE','OVAL','RECT','NGON','POLYGON']);
+export const planFieldContract = () => ({fields:structuredClone(FIELDS),required:structuredClone(REQUIRED),lengths:[...LENGTHS]});
 export const assert = (ok,msg) => { if(!ok) throw new Error(msg); };
 const number = (v,label) => {assert(typeof v==='number'&&Number.isFinite(v),`${label}: finite number required`);return v;};
 const string = (v,label,empty=false) => {assert(typeof v==='string'&&(empty||v.trim()),`${label}: string required`);return v;};
@@ -214,10 +215,11 @@ export function validatePlan(raw) {
  assert(['layout','trial-route','route','relayout','finish'].includes(raw.phase),'Explicit phase required');
  const scale=raw.units==='mm'?1/0.0254:1;
  const rc=raw.constraints??{},ro=raw.options??{};
- keys(rc,['noRightAngle','minTrackWidth','minViaHole','minAnnularRing','allowedLayers','reservedLayers','boardBounds','fixedComponents','topOnlyExcept','netRules','circularKeepouts'],'constraints');
+ keys(rc,['noRightAngle','minTrackWidth','minViaHole','minAnnularRing','minClearance','minHoleClearance','allowedLayers','reservedLayers','boardBounds','fixedComponents','topOnlyExcept','netRules','circularKeepouts'],'constraints');
  keys(ro,['batchSize','saveAfterBatch','toleranceMil'],'options');
  const constraints={noRightAngle:rc.noRightAngle!==false,minTrackWidth:number(rc.minTrackWidth??0,'minTrackWidth')*scale,minViaHole:number(rc.minViaHole??0,'minViaHole')*scale,minAnnularRing:number(rc.minAnnularRing??0,'minAnnularRing')*scale,allowedLayers:(rc.allowedLayers??['TOP','BOTTOM']).map(x=>layer(x)),reservedLayers:{},boardBounds:null,fixedComponents:rc.fixedComponents??[],topOnlyExcept:rc.topOnlyExcept??null};
- for(const k of ['minTrackWidth','minViaHole','minAnnularRing'])assert(constraints[k]>=0,`${k} must be nonnegative`);
+ for(const k of ['minClearance','minHoleClearance'])constraints[k]=number(rc[k]??0,k)*scale;
+ for(const k of ['minTrackWidth','minViaHole','minAnnularRing','minClearance','minHoleClearance'])assert(constraints[k]>=0,`${k} must be nonnegative`);
  for(const [k,v]of Object.entries(rc.reservedLayers??{})){assert(Array.isArray(v)&&v.every(n=>typeof n==='string'),'reservedLayers values must be net arrays');constraints.reservedLayers[layer(k)]=v;}
  for(const k of ['fixedComponents','topOnlyExcept'])if(constraints[k]!==null)assert(Array.isArray(constraints[k])&&constraints[k].every(n=>typeof n==='string'),`${k}: component-ID array required`);
  if(rc.boardBounds){keys(rc.boardBounds,['minX','maxX','minY','maxY'],'boardBounds');constraints.boardBounds=Object.fromEntries(Object.entries(rc.boardBounds).map(([k,v])=>[k,number(v,k)*scale]));const b=constraints.boardBounds;assert(b.minX<b.maxX&&b.minY<b.maxY,'Invalid boardBounds');}

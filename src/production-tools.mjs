@@ -1,5 +1,6 @@
 import { getPcbCapabilities, importSchematicChanges, prepareSchematicSync, readSchematicSyncState } from './advanced.mjs';
 import { auditGeometry } from './audit.mjs';
+import { inspectGroupQuality } from './group-quality.mjs';
 import { readPcb, saveDocument } from './bridge.mjs';
 import { analyzeConnectivity } from './connectivity.mjs';
 import { connectGateway, gatewayError, hashObject, prepareGatewayState } from './gateway-client.mjs';
@@ -20,7 +21,7 @@ export async function statusPcb({ target, include = [], bridgeUrl }) {
   return result;
 }
 
-export async function auditPcb({ target, snapshot, checks = ['geometry'], toleranceMil, detailLimit = 100, net, nativeUnroutedCount, bridgeUrl }) {
+export async function auditPcb({ target, snapshot, checks = ['geometry'], toleranceMil, detailLimit = 100, net, nativeUnroutedCount, groups, referenceLayers, bridgeUrl }) {
   if ((target === undefined) === (snapshot === undefined)) throw gatewayError('INVALID_REQUEST', 'Provide exactly one of target or snapshot');
   if (snapshot !== undefined && bridgeUrl !== undefined) throw gatewayError('INVALID_REQUEST', 'bridgeUrl applies only to a live target');
   let data = snapshot, source = 'provided snapshot', session = null, expected = null;
@@ -41,7 +42,9 @@ export async function auditPcb({ target, snapshot, checks = ['geometry'], tolera
     }
     if (expected) await session.rpc('events.getState', {}, { expected: expectedForRpc(expected) });
   }
+  if (groups !== undefined && !checks.includes('groupQuality')) throw gatewayError('INVALID_REQUEST', 'groups require checks=groupQuality');
   const result = { ok: true, readOnly: true, source, checks };
+  if (checks.includes('groupQuality')) result.groupQuality = inspectGroupQuality(data, { groups, referenceLayers, detailLimit });
   if (checks.includes('geometry')) result.geometry = auditGeometry(data, { toleranceMil, detailLimit });
   if (checks.includes('connectivity')) result.connectivity = analyzeConnectivity(data, { net, toleranceMm: toleranceMil === undefined ? undefined : toleranceMil * 0.0254, maxDetails: Math.min(detailLimit, 2000), nativeUnroutedCount });
   return result;

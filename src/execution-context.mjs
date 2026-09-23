@@ -22,6 +22,7 @@ export async function contextRpc(operation, args = {}, { write = false } = {}) {
   const executionId = write ? `${context.executionId}:${context.sequence++}:${operation}` : null;
   const response = await context.session.rpc(operation, { ...args, ...(executionId ? { executionId } : {}) }, { expected: context.expected });
   if (write) {
+    if(operation==='pcb.save'&&response.result?.saved!==true)throw gatewayError('SAVE_NOT_ACKNOWLEDGED','Save was not acknowledged; preserve verified geometry and reconcile state',{executionId,saved:false});
     const source = response.result?.sourceAfter?.sha256;
     if (!/^[0-9a-f]{64}$/.test(source ?? '')) throw gatewayError('PARTIAL_SUCCESS', 'Write returned without a verified source hash; read actual state', { outcome: 'unknown', executionId });
     context.expected = expectedForRpc({ generationId: response.state.generationId, changeEpoch: response.state.changeEpochAfter, sourceHash: source, bridgeGenerationId: response.bridgeGenerationId });
@@ -46,8 +47,13 @@ export async function contextVerifiedPublicWrite(operation, adapter) {
   await context.session.rpc('events.getState', {}, { expected });
   const executionId = `${context.executionId}:${context.sequence++}:${operation}`;
   const result = await adapter(context, expected);
-  const observed = await prepareGatewayState(context.session);
-  context.expected = validatePublicWriteTransition(expected, result, observed);
+  try {
+    const observed = await prepareGatewayState(context.session);
+    context.expected = validatePublicWriteTransition(expected, result, observed);
+  } catch(error) {
+    if(result?.batchResult)error.details={...(error.details??{}),observedBatchResult:result.batchResult,observedOperationIds:(result.batchResult.results??[]).filter(r=>r.verified===true).map(r=>r.id),sourceTransitionVerified:false};
+    throw error;
+  }
   context.operations.push({ operation, executionId, replayed: false, transport: 'verified-public-api-with-v2-state', nativeTransaction: false });
   return result;
 }
@@ -90,7 +96,8 @@ export async function runGuardedNative({ target, expected, executionId, bridgeUr
     await context.session.rpc('events.getState', {}, { expected: state });
     return await storage.run(context, async () => {
       const result = await operation();
-      await context.session.rpc('events.getState', {}, { expected: context.expected });
+      try { await context.session.rpc('events.getState', {}, { expected: context.expected }); }
+      catch(error){error.details={...(error.details??{}),confirmedPlanOperations:result.results??[],boardDelta:result.boardDelta??null,executionLedger:result.executionLedger??null,checkpoint:result.checkpoint??null,saveCount:result.saveCount??null,finalStateVerified:false,requiresReconcile:true};throw error;}
       return { ...result, execution: { executionId: context.executionId, transport: 'typed-v2', operations: context.operations, finalExpected: context.expected, eventCoverage: expected.eventCoverage ?? 'partial', nativeTransaction: false } };
     });
   } catch (error) {

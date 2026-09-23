@@ -10,7 +10,7 @@ import { runGuardedNative } from './execution-context.mjs';
 import { exportPcb } from './export.mjs';
 import { readRouteScene } from './route-scene.mjs';
 import { auditPcb, statusPcb, synchronizePcb } from './production-tools.mjs';
-export const VERSION = '2.5.1';
+export const VERSION = '2.6.0';
 import { captureSnapshot, inspectPinmap } from './verification.mjs';
 import { inspectAllSilkscreen } from './silkscreen-all.mjs';
 import { exportNativeBackup, captureView } from './backup.mjs';
@@ -469,7 +469,7 @@ const descriptions = {
   pcb_status: 'Read exact PCB identity and units. Optionally include runtime capabilities, native board statistics or a prepared change-state guard.',
   pcb_read: 'Read paged native PCB objects or a parsed DSN route scene. DSN coordinates retain a separate frame until a transform is verified.',
   pcb_pick: 'Find native PCB objects by a point or rectangle without changing selection; coordinates require explicit units.',
-  pcb_execute_plan: 'Execute PCB geometry. Anchor circles by center and polygons by a [0,0] vertex. Layout/relayout uses one batch up to 100 operations. Reject cross-component pad overlap and pad/via intrusion; roll back unsafe layer changes and return a placement gate.',
+  pcb_execute_plan: 'Build missing old-state fields, prepare and execute explicit geometry with whole-plan preflight, or reconcile an uncertain result read-only. Blocks modeled copper/drill/pad conflicts before writing. Returns verified progress and unapplied remainder.',
   pcb_execute_text_plan: 'Validate, prepare or execute a text/attribute plan. Execution requires its prepared guard and independently verifies written text.',
   pcb_cleanup_components: 'Preflight or execute guarded bulk cleanup: unlock all components and remove component reference-designator silkscreen while preserving mandatory Designator identity, geometry, ordinary strings and all other attributes.',
   pcb_rebuild_pours: 'Rebuild selected or all copper pours, read actual fill results and optionally save. Partial rebuilding may affect other fills on client 3.2.186.',
@@ -477,7 +477,7 @@ const descriptions = {
   pcb_manage_constraint_group: 'Change one constraint group with expected old values and independent readback; optionally save the PCB.',
   pcb_compare_associated_netlists: 'Read stable semantic differences between the associated schematic and PCB without importing changes.',
   pcb_import_schematic_changes: 'Preflight or apply associated schematic changes with PCB and netlist guards. Execute handles native confirmation and rejects no-op success. After a window reconnect, it accepts only exact-target final-state verification and never replays the write.',
-  pcb_audit_geometry: 'Inspect supplied or live copper geometry and optional connectivity. Unmodeled copper and pad geometry keep connectivity explicitly partial.',
+  pcb_audit_geometry: 'Inspect supplied or live geometry, partial connectivity, or explicit functional groups: pad distances, line/arc sums, vias, region exits and reference-layer use. Metrics do not certify connectivity or reference-plane continuity.',
   pcb_inspect_pinmap: 'Read stable component pin numbers/nets and canonical pad hole dimensions. Raw footprint hole fields stay traceable; physicalDrill distinguishes real multi-layer drills from inactive SMD hole state.',
   pcb_inspect_silkscreen: 'Inspect visible text and component attributes for size, overlap and clipping; unavailable bounds remain unknown.',
   pcb_save_and_drc: 'Save the guarded PCB and/or run resumable verbose native DRC. Completed calls return full counts and summaries with paged violation details; RUNNING calls return drcJobId for continuation.',
@@ -516,7 +516,7 @@ function buildDefaultRegistry() {
     return { ok: true, ...await readPcb(request, { bridgeUrl }) };
   }));
   for (const [name, kind] of [['pcb_execute_plan', 'geometry'], ['pcb_execute_text_plan', 'text']]) {
-    change(name, { ...(kind === 'geometry' ? planInputSchema : textPlanInputSchema), mode: z.enum(['validate', 'prepare', 'execute']).optional().default('execute'), guard: guardSchema.optional(), executionId: executionFields.executionId, bridgeUrl: bridgeUrlSchema }, args => handled(() => runPlan({ planPath: args.planPath, plan: args.plan }, { kind, mode: args.mode, guard: args.guard, executionId: args.executionId, bridgeUrl: args.bridgeUrl })));
+    change(name, { ...(kind === 'geometry' ? planInputSchema : textPlanInputSchema), mode: z.enum(kind === 'geometry' ? ['build', 'reconcile', 'validate', 'prepare', 'execute'] : ['validate', 'prepare', 'execute']).optional().default('execute'), guard: guardSchema.optional(), executionId: executionFields.executionId, bridgeUrl: bridgeUrlSchema }, args => handled(() => runPlan({ planPath: args.planPath, plan: args.plan }, { kind, mode: args.mode, guard: args.guard, executionId: args.executionId, bridgeUrl: args.bridgeUrl })));
   }
   for (const [name, fn] of [['pcb_rebuild_pours', rebuildPours], ['pcb_manage_constraint_group', manageConstraintGroup]]) {
     change(name, { ...registry.get(name).definition.inputSchema, ...executionFields }, args => handled(() => runGuardedNative(args, () => fn(args))));
@@ -528,8 +528,10 @@ function buildDefaultRegistry() {
   const audit = registry.get('pcb_audit_geometry');
   change('pcb_audit_geometry', {
     ...audit.definition.inputSchema,
-    snapshot: z.object({ units: z.enum(['mil', 'mm']), lines: z.array(z.unknown()).max(30000), pads: z.array(z.unknown()).max(30000).optional(), vias: z.array(z.unknown()).max(30000).optional(), arcs: z.array(z.unknown()).optional(), fills: z.array(z.unknown()).optional(), poured: z.array(z.unknown()).optional(), regions: z.array(z.unknown()).optional(), coverage: z.unknown().optional() }).strict().optional(),
-    checks: z.array(z.enum(['geometry', 'connectivity'])).min(1).max(2).optional(), net: z.string().optional(), nativeUnroutedCount: z.number().int().min(0).optional(),
+    snapshot: z.object({ units: z.enum(['mil', 'mm']), lines: z.array(z.unknown()).max(30000), pads: z.array(z.unknown()).max(30000).optional(), vias: z.array(z.unknown()).max(30000).optional(), arcs: z.array(z.unknown()).optional(), fills: z.array(z.unknown()).optional(), poured: z.array(z.unknown()).optional(), regions: z.array(z.unknown()).optional(), components: z.array(z.unknown()).optional(), coverage: z.unknown().optional() }).strict().optional(),
+    groups: z.array(z.object({ name: z.string().min(1).max(160), role: z.string().min(1).max(160).optional(), nets: z.array(z.string().min(1)).min(1).max(512), pairs: z.array(z.object({ name: z.string().max(160).optional(), fromPadId: z.string().min(1), toPadId: z.string().min(1), maxDistanceMm: z.number().positive().optional() }).strict()).max(512).optional(), region: regionSchema.optional(), maxViaCount: z.number().int().min(0).optional() }).strict()).min(1).max(32).optional(),
+    referenceLayers: z.array(z.object({ layer: z.number().int(), net: z.string().min(1) }).strict()).max(32).optional(),
+    checks: z.array(z.enum(['geometry', 'connectivity', 'groupQuality'])).min(1).max(3).optional(), net: z.string().optional(), nativeUnroutedCount: z.number().int().min(0).optional(),
   }, args => handled(() => auditPcb(args)));
   change('pcb_save_and_drc', { ...registry.get('pcb_save_and_drc').definition.inputSchema, expected: expectedSchema.optional(), executionId: executionFields.executionId }, args => handled(() => {
     const effectiveSave = args.save ?? !args.drcJobId;
@@ -561,7 +563,7 @@ export async function invokeRegisteredTool(name, arguments_, profile = 'default'
   return entry.handler(z.object(entry.definition.inputSchema).strict().parse(arguments_));
 }
 export function createPcbServer(profile = 'default') {
-  const mcp = new McpServer({ name: 'easyeda-pcb', version: VERSION }, { instructions: 'Use exact window/project/document identities and explicit coordinate units. Geometry decisions are supplied by the caller; no automatic placement or routing. Keep reads dependency-scoped: after target/status and the exact prerequisites for the next operation are known, execute the plan instead of running broad audits. Writes require prepared generation/epoch/source guards, old object assertions and independent readback. Treat workflowReceipt as the continuation contract: report PCB progress only when boardProgressCredited and boardDelta.visibleBoardChange are true; validate, prepare, tests and deployment are not board changes. For recoveryDirective or RECONCILE_EXACT_OPERATION, read only minimumReadScope, obey replayPolicy, rebuild only unfinished work and immediately resume the saved parent PCB action. Do not expand a healthy local Bridge timeout into broad diagnostics or stop at connection recovery. Diagnostics and compatibility profiles are not production services.' });
+  const mcp = new McpServer({ name: 'easyeda-pcb', version: VERSION }, { instructions: 'Use exact window/project/document identities and explicit coordinate units. Geometry decisions are supplied by the caller; no automatic placement or routing. Build one compact connection index when needed; group circuits and reserve channels before committing local geometry. Keep subsequent reads dependency-scoped; trial-route the most constrained groups before extensive copper. Use groupQuality metrics to decide retain versus relayout, not as electrical approval. Writes require prepared generation/epoch/source guards, old object assertions and independent readback. Treat workflowReceipt as the continuation contract: report PCB progress only when boardProgressCredited and boardDelta.visibleBoardChange are true; validate, prepare, tests and deployment are not board changes. For recoveryDirective or RECONCILE_EXACT_OPERATION, read only minimumReadScope, obey replayPolicy, rebuild only unfinished work and immediately resume the saved parent PCB action. Do not expand a healthy local Bridge timeout into broad diagnostics or stop at connection recovery. Diagnostics and compatibility profiles are not production services.' });
   for (const entry of getToolRegistry(profile).values()) mcp.registerTool(entry.name, entry.definition, entry.handler);
   return mcp;
 }
