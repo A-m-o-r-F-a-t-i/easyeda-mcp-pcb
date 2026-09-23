@@ -4,13 +4,14 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import * as z from 'zod/v4';
 import { pathToFileURL } from 'node:url';
 import { runPlan } from './guarded-plan.mjs';
+import { createSimpleRegistry } from './simple-tools.mjs';
 import { cleanupComponents } from './component-cleanup.mjs';
 import { readNativeRegions } from './region-read.mjs';
 import { runGuardedNative } from './execution-context.mjs';
 import { exportPcb } from './export.mjs';
 import { readRouteScene } from './route-scene.mjs';
 import { auditPcb, statusPcb, synchronizePcb } from './production-tools.mjs';
-export const VERSION = '2.6.1';
+export const VERSION = '3.0.0';
 import { captureSnapshot, inspectPinmap } from './verification.mjs';
 import { inspectAllSilkscreen } from './silkscreen-all.mjs';
 import { exportNativeBackup, captureView } from './backup.mjs';
@@ -546,7 +547,7 @@ function buildDefaultRegistry() {
   }, handler: args => handled(() => exportPcb(args)) });
   return registry;
 }
-const productionRegistry = buildDefaultRegistry();
+const productionRegistry = createSimpleRegistry(buildDefaultRegistry());
 export function getToolRegistry(profile = 'default') {
   if (profile === 'default') return productionRegistry;
   if (profile === 'legacy') return legacyRegistry;
@@ -563,7 +564,7 @@ export async function invokeRegisteredTool(name, arguments_, profile = 'default'
   return entry.handler(z.object(entry.definition.inputSchema).strict().parse(arguments_));
 }
 export function createPcbServer(profile = 'default') {
-  const mcp = new McpServer({ name: 'easyeda-pcb', version: VERSION }, { instructions: 'Use exact window/project/document identities and explicit coordinate units. Geometry decisions are supplied by the caller; no automatic placement or routing. Build one compact connection index when needed; group circuits and reserve channels before committing local geometry. Keep subsequent reads dependency-scoped; trial-route the most constrained groups before extensive copper. Use groupQuality metrics to decide retain versus relayout, not as electrical approval. Writes require prepared generation/epoch/source guards, old object assertions and independent readback. Treat workflowReceipt as the continuation contract: report PCB progress only when boardProgressCredited and boardDelta.visibleBoardChange are true; validate, prepare, tests and deployment are not board changes. For recoveryDirective or RECONCILE_EXACT_OPERATION, read only minimumReadScope, obey replayPolicy, rebuild only unfinished work and immediately resume the saved parent PCB action. Do not expand a healthy local Bridge timeout into broad diagnostics or stop at connection recovery. Diagnostics and compatibility profiles are not production services.' });
+  const mcp = new McpServer({ name: 'easyeda-pcb', version: VERSION }, { instructions: 'Prefer MCP for every common PCB operation. The MCP wraps native API complexity, units, identities, bulk calls and feedback. Use pcb_read overview for component footprints, sizes, poses and pin/net orientation data; submit explicit operations to pcb_execute_plan. No prepare/guard chain or design-approval gate is required. Large batches are split internally without changing the supplied geometry or order. The model decides placement, routing, analysis timing and next actions; there is no automatic placement or path search. Use board/local SVG and optional DRC/geometry reports as data. Preserve actual partial results and never replay uncertain writes blindly. A unique active PCB can omit target; when several targets are ambiguous, specify an exact document UUID. Raw API is only a documented capability gap or diagnosis fallback, not the normal editing path. Legacy profiles are not registered as additional default services.' });
   for (const entry of getToolRegistry(profile).values()) mcp.registerTool(entry.name, entry.definition, entry.handler);
   return mcp;
 }

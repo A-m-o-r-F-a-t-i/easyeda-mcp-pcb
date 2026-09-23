@@ -11,6 +11,8 @@ import { createAtomicExport } from '../src/export.mjs';
 import { getToolRegistry, invokeRegisteredTool } from '../src/server.mjs';
 import { assertGuardMatchesPlan } from '../src/guarded-plan.mjs';
 import { hashObject } from '../src/gateway-client.mjs';
+import { runPlan } from '../src/guarded-plan.mjs';
+import * as z from 'zod/v4';
 
 const pad = (id, x, layer = 1) => ({ primitiveId: id, net: 'N1', layer, x, y: 0, rotation: 0, pad: ['ELLIPSE', 1, 1], hole: null, metallization: true, padNumber: id });
 const line = (id, x1, x2, layer = 1) => ({ primitiveId: id, net: 'N1', layer, startX: x1, startY: 0, endX: x2, endY: 0, lineWidth: 0.2 });
@@ -105,20 +107,22 @@ test('tool profiles expose exactly 21 production tools, 3 diagnostics and 30 leg
   for (const name of ['pcb_capabilities', 'pcb_validate_plan', 'pcb_validate_text_plan', 'pcb_capture_view', 'pcb_prepare_schematic_sync', 'pcb_capture_snapshot', 'pcb_compare_snapshots', 'pcb_realtime_drc']) assert.equal(getToolRegistry().has(name), false);
   assert.equal(getToolRegistry().has('pcb_export'), true);
 });
-test('both plan tools keep offline validation available without exposing a separate validator', async () => {
+test('historical offline validation remains available without imposing it on v3 edits', async () => {
   const value = { schema: 'easyeda-pcb-plan/v2', intent: 'offline validation fixture', target: { windowId: 'w1', projectUuid: 'p1', documentUuid: 'd1' }, units: 'mil', phase: 'route', constraints: { minTrackWidth: 4, minViaHole: 8, minAnnularRing: 3, allowedLayers: ['TOP', 'BOTTOM'] }, operations: [{ id: 'line1', type: 'line.create', net: 'N', layer: 'TOP', start: [0, 0], end: [50, 0], width: 8 }] };
-  const result = await invokeRegisteredTool('pcb_execute_plan', { plan: value, mode: 'validate' });
-  assert.equal(result.structuredContent.ok, true);
-  assert.equal(result.structuredContent.wrotePCB, false);
+  const result = await runPlan({plan:value}, {mode:'validate'});
+  assert.equal(result.ok, true);
+  assert.equal(result.wrotePCB, false);
   const changed = structuredClone(value); changed.intent = 'changed';
   assert.throws(() => assertGuardMatchesPlan({ schema: 'easyeda-pcb-guard/v1', planSha256: hashObject(value), target: value.target }, changed, value), /changed after preparation/);
 });
-test('production target fields and mutation guards are enforced at schema boundaries', async () => {
-  await assert.rejects(invokeRegisteredTool('pcb_status', { target: { documentUuid: 'd1' } }));
-  await assert.rejects(invokeRegisteredTool('pcb_rebuild_pours', { target: { documentUuid: 'd1', projectUuid: 'p1', windowId: 'w1' } }));
-  await assert.rejects(invokeRegisteredTool('pcb_execute_plan', { plan: {}, mode: 'validate', hiddenBypass: true }));
+test('v3 accepts compact targets and direct edits while rejecting unsupported fields without contacting a PCB', () => {
+  const schema=name=>z.object(getToolRegistry().get(name).definition.inputSchema).strict();
+  assert.equal(schema('pcb_status').safeParse({target:{documentUuid:'d1'}}).success,true);
+  assert.equal(schema('pcb_rebuild_pours').safeParse({target:'d1'}).success,true);
+  assert.equal(schema('pcb_execute_plan').safeParse({operations:[{op:'place',items:[{ref:'U1',angle:30}]}]}).success,true);
+  assert.equal(schema('pcb_execute_plan').safeParse({plan:{},mode:'validate',hiddenBypass:true}).success,false);
 });
-test('stdio discovery returns the actual 21-tool schema and honors validation mode', async t => {
+test('stdio discovery returns 21 tools and serves full editing schemas without a PCB connection', async t => {
   const transport = new StdioClientTransport({ command: process.execPath, args: [fileURLToPath(new URL('../src/server.mjs', import.meta.url))], env: { ...process.env, EASYEDA_PCB_PROFILE: 'default' }, stderr: 'pipe' });
   const client = new Client({ name: 'merged-v2-test', version: '1.0.0' });
   t.after(() => client.close());
@@ -127,7 +131,8 @@ test('stdio discovery returns the actual 21-tool schema and honors validation mo
   assert.equal(tools.length, 21);
   assert.equal(new Set(tools.map(item => item.name)).size, 21);
   assert.ok(tools.every(item => item.description.length < 260));
-  const result = await client.callTool({ name: 'pcb_execute_plan', arguments: { plan: {}, mode: 'validate' } });
-  assert.equal(result.isError, true);
-  assert.equal(result.structuredContent.ok, false);
+  const result = await client.callTool({ name:'pcb_read',arguments:{kind:'operations'} });
+  assert.notEqual(result.isError,true);
+  assert.equal(result.structuredContent.ok,true);
+  assert.equal(result.structuredContent.schema,'easyeda-pcb-edit/v3');
 });

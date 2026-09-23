@@ -90,47 +90,25 @@ try {
   assert.equal(new Set(names).size, expectedDefault.length);
   assert.ok(listed.tools.every(tool => tool.description.length < 260));
 
-  const plan = {
-    schema: 'easyeda-pcb-plan/v2',
-    intent: 'MCP smoke validation',
-    target: exactTarget,
-    units: 'mil',
-    phase: 'route',
-    constraints: { minTrackWidth: 4, minViaHole: 8, minAnnularRing: 3, allowedLayers: ['TOP', 'BOTTOM'] },
-    operations: [{ id: 'l1', type: 'line.create', net: 'N1', layer: 'TOP', start: [10, 10], end: [50, 10], width: 8 }],
-  };
-  const result = await production.client.callTool({ name: 'pcb_execute_plan', arguments: { plan, mode: 'validate' } });
-  assert.equal(result.isError, undefined);
-  assert.equal(result.structuredContent?.ok, true);
-  assert.equal(result.structuredContent?.wrotePCB, false);
-  assert.equal(result.structuredContent?.summary?.expandedOperationCount, 1);
-  assert.equal(result.structuredContent?.workflowReceipt?.disposition, 'NO_BOARD_CHANGE');
-  assert.equal(result.structuredContent?.workflowReceipt?.boardProgressCredited, false);
-
-  const textPlan = {
-    schema: 'easyeda-pcb-text-plan/v1',
-    intent: 'MCP text smoke validation',
-    target: exactTarget,
-    units: 'mil',
-    operations: [{ id: 'text-1', type: 'string.create', state: { layer: 'TOP_SILKSCREEN', x: 10, y: 20, text: 'UART1', fontFamily: 'default', fontSize: 45, lineWidth: 6, alignMode: 'CENTER', rotation: 0, reverse: false, expansion: 0, mirror: false, primitiveLock: false } }],
-  };
-  const textResult = await production.client.callTool({ name: 'pcb_execute_text_plan', arguments: { plan: textPlan, mode: 'validate' } });
-  assert.equal(textResult.isError, undefined);
-  assert.equal(textResult.structuredContent?.ok, true);
-  assert.equal(textResult.structuredContent?.wrotePCB, false);
-  assert.equal(textResult.structuredContent?.summary?.sourceOperationCount, 1);
+  const result = await production.client.callTool({name:'pcb_read',arguments:{kind:'operations'}});
+  assert.notEqual(result.isError,true);
+  assert.equal(result.structuredContent?.schema,'easyeda-pcb-edit/v3');
+  const edit=listed.tools.find(t=>t.name==='pcb_execute_plan').inputSchema;
+  assert.ok(edit.properties.operations.items);
+  assert.equal(edit.properties.guard,undefined);
+  assert.equal(edit.properties.mode,undefined);
 
   const snapshot = { units: 'mil', pads: [], vias: [], lines: [
     { primitiveId: 'a', net: 'N', layer: 1, startX: 0, startY: 0, endX: 100, endY: 0, lineWidth: 8 },
     { primitiveId: 'b', net: 'N', layer: 1, startX: 100, startY: 0, endX: 100, endY: 100, lineWidth: 8 },
   ] };
   const audited = await production.client.callTool({ name: 'pcb_audit_geometry', arguments: { snapshot, detailLimit: 5 } });
-  assert.equal(audited.isError, undefined);
+  assert.notEqual(audited.isError, true);
   assert.equal(audited.structuredContent?.geometry?.counts?.ordinaryBadJoints, 1);
   assert.equal(audited.structuredContent?.geometry?.engineeringRelease, 'NOT_EVALUATED');
   const invalid = await production.client.callTool({ name: 'pcb_audit_geometry', arguments: { snapshot, target: exactTarget } });
   assert.equal(invalid.isError, true);
-  assert.match(invalid.structuredContent?.error, /exactly one/i);
+  assert.match(invalid.structuredContent?.error?.message ?? invalid.structuredContent?.error, /exactly one/i);
 
   const legacy = await connectProfile('legacy');
   sessions.push(legacy);

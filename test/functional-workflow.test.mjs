@@ -126,12 +126,12 @@ test('FW09 final-state uncertainty retains completed operation receipts and forb
   await assert.rejects(runPlan({plan},{mode:'execute',guard:p.guard,bridgeUrl}),e=>e.code==='CONCURRENT_CHANGE'&&e.details.finalStateVerified===false&&e.details.confirmedPlanOperations.length===1&&e.details.executionLedger.replayAllowed===false);
   assert.equal(f.counters().writes,1);
 });
-test('FW10 registered build mode fills native old fields and exact affected nets without writing',async t=>{
+test('FW10 historical plan builder fills native old fields without being a default editing prerequisite',async t=>{
   const f=fixture(t,{components:[{primitiveId:'c1',x:100,y:100,rotation:0,layer:1,primitiveLock:false}],pads:[pad('p1',100,'SIG',{parentPrimitiveId:'c1'}),pad('p10',0,'OTHER',{parentPrimitiveId:'c10'})]});
   const input={intent:'Explicit component placement',target,units:'mm',operations:[{id:'move',type:'component.modify',primitiveId:'c1',set:{x:10,y:10},copperPolicy:'replan'}]};
-  const result=await invokeRegisteredTool('pcb_execute_plan',{plan:input,mode:'build',bridgeUrl});
-  assert.equal(result.isError,undefined);assert.deepEqual(result.structuredContent.plan.operations[0].affectedNets,['SIG']);
-  assert.equal(result.structuredContent.plan.operations[0].expected.x,2.54);assert.equal(f.counters().writes,0);
+  const result=await runPlan({plan:input},{mode:'build',bridgeUrl});
+  assert.deepEqual(result.plan.operations[0].affectedNets,['SIG']);
+  assert.equal(result.plan.operations[0].expected.x,2.54);assert.equal(f.counters().writes,0);
 });
 test('FW11 builder preserves caller assertions, includes fillMode and does not invent native geometry',()=>{
   const input={intent:'Update fill',target,units:'mil',operations:[{id:'f',type:'fill.modify',primitiveId:'fill',set:{lineWidth:0.3},expected:{net:'ASSERTED'}}]};
