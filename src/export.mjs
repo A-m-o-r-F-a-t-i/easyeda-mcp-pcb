@@ -56,6 +56,7 @@ export async function createAtomicExport(outputPath, producer, { maximumBytes = 
 
 export async function exportPcb(request) {
   const { target, kind, outputPath, bridgeUrl, maxBytes = 8388608, scope = 'project', parseScene = true, format, unit, netlistType } = request;
+  const effectiveUnit = kind === 'pick_place' ? (unit ?? 'mil') : unit;
   if (!['backup', 'dsn', ...Object.keys(MANUFACTURING)].includes(kind)) throw gatewayError('INVALID_REQUEST', 'Unknown export kind');
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 4 || maxBytes > 16777216) throw gatewayError('INVALID_REQUEST', 'Export byte limit must be 4..16777216');
   if (kind === 'backup' && path.extname(outputPath).toLowerCase() !== '.epro') throw gatewayError('INVALID_REQUEST', 'Native backup requires .epro');
@@ -73,7 +74,7 @@ export async function exportPcb(request) {
       await fs.writeFile(temporary, file.bytes, { flag: 'wx' });
       return { ok: true, kind, target: file.target, transport: file.transport, scene: scene ? { ...scene.summary, units: scene.units, sourceUnits: scene.sourceUnits, resolution: scene.resolution, coordinateFrame: scene.coordinateFrame, apiCoordinateTransform: null, coverage: { ...scene.coverage, warnings: scene.coverage.warnings.slice(0, 20) } } : null };
     }
-    await exportManufacturingFile({ target, kind: MANUFACTURING[kind], outputPath: temporary, format, unit, netlistType, maxBytes, bridgeUrl });
-    return { ok: true, kind, target, format: format ?? null, unit: unit ?? null, netlistType: netlistType ?? null };
+    await exportManufacturingFile({ target, kind: MANUFACTURING[kind], outputPath: temporary, format, unit: effectiveUnit, netlistType, maxBytes, bridgeUrl });
+    return { ok: true, kind, target, format: format ?? null, unit: effectiveUnit ?? null, netlistType: netlistType ?? null };
   }, { maximumBytes: maxBytes });
 }

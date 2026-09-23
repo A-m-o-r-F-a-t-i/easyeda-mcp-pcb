@@ -1,7 +1,7 @@
 /** Direct read/utility calls, sharing the same target and object adapters as edits. */
 export async function simpleReadRuntime(eda,request,factory){
  const h=factory(eda,request),identity=await h.checkTarget();
- if(request.kind==='status')return {ok:true,target:request.target,...identity,apiUnits:'mil',defaultInputUnits:'mm',canvasOrigin:await eda.pcb_Document.getCanvasOrigin(),clientVersion:await eda.sys_Environment?.getEditorCurrentVersion?.()??null};
+ if(request.kind==='status')return {ok:true,target:request.target,...identity,apiUnits:'mil',defaultInputUnits:'mil',canvasOrigin:await eda.pcb_Document.getCanvasOrigin(),clientVersion:await eda.sys_Environment?.getEditorCurrentVersion?.()??null};
  if(request.kind==='layers')return {ok:true,target:request.target,items:await eda.pcb_Layer.getAllLayers()};
  if(request.kind==='nets'||request.kind==='netlist')return {ok:true,target:request.target,data:await eda.pcb_Net[request.kind==='nets'?'getAllNets':'getNetlist']()};
  const map={components:'component',pads:'pad',lines:'line',arcs:'arc',vias:'via',polylines:'polyline',fills:'fill',pours:'pour',poured:'poured',regions:'region',strings:'string',attributes:'attribute'};

@@ -74,7 +74,7 @@ export async function saveFeedback(scene,options={}){
  return {path:file,uri:pathToFileURL(file).href,bytes:Buffer.byteLength(render.svg),viewBox:render.viewBox,metadata:render.metadata,svg:render.svg};
 }
 export async function renderView(request){
- const {scene,target}=await collectScene(request),scale=request.units==='mil'?1:1/0.0254;
+ const {scene,target}=await collectScene(request),scale=(request.units??'mil')==='mil'?1:1/0.0254;
  const region=request.region?{minX:Math.min(request.region.left,request.region.right)*scale,maxX:Math.max(request.region.left,request.region.right)*scale,minY:Math.min(request.region.top,request.region.bottom)*scale,maxY:Math.max(request.region.top,request.region.bottom)*scale}:null;
  return {ok:true,target,...await saveFeedback(scene,{...request,region})};
 }
@@ -88,7 +88,7 @@ export async function applyEdits(request,dependencies={}){
  while(offset<actions.length){
   let bytes=0,end=offset;
   while(end<actions.length){const next=Buffer.byteLength(JSON.stringify(actions[end]));if(end>offset&&bytes+next>196608)break;bytes+=next;end++;}
-  const job={target:context.target,units:request.units??'mm',executionId,offset,operations:actions.slice(offset,end)};
+  const job={target:context.target,units:request.units??'mil',executionId,offset,operations:actions.slice(offset,end)};
   try{
    const batch=await run(context.bridge,codeFor(simpleEditRuntime,job),65000);batches++;
    if(!Number.isInteger(batch.nextIndex)||batch.nextIndex<=offset)throw error('INVALID_EXECUTION_RESULT','The native execution did not advance',{batch});
@@ -96,12 +96,12 @@ export async function applyEdits(request,dependencies={}){
    if(batch.results.some(r=>r.status==='unknown'||r.error?.code==='TARGET_CHANGED'))break;
   }catch(e){
    transportError={code:e.code??'TRANSPORT_ERROR',message:String(e.message),outcome:'unknown'};
-   try{const journal=await run(context.bridge,codeFor(simpleEditRuntime,{target:context.target,units:request.units??'mm',executionId,inspect:true}),20000);if(journal.found){const known=new Set(results.map(r=>r.index));results.push(...journal.results.filter(r=>!known.has(r.index)));offset=journal.nextIndex;transportError.journalRunning=journal.running;transportError.current=journal.current??null;transportError.outcome=journal.running?'in_progress':'journal_recovered';}}catch(readError){transportError.journalError=String(readError.message);}
+   try{const journal=await run(context.bridge,codeFor(simpleEditRuntime,{target:context.target,units:request.units??'mil',executionId,inspect:true}),20000);if(journal.found){const known=new Set(results.map(r=>r.index));results.push(...journal.results.filter(r=>!known.has(r.index)));offset=journal.nextIndex;transportError.journalRunning=journal.running;transportError.current=journal.current??null;transportError.outcome=journal.running?'in_progress':'journal_recovered';}}catch(readError){transportError.journalError=String(readError.message);}
    break;
   }
  }
  for(const a of actions.slice(offset))results.push({index:a.index,sourceIndex:a.sourceIndex,itemIndex:a.itemIndex,op:a.op,status:transportError&&a.index===offset?'unknown':'not_executed',changes:[]});
- const counts=results.reduce((a,r)=>(a[r.status]=(a[r.status]??0)+1,a),{}),output={ok:!transportError&&results.every(r=>r.status==='applied'),target:context.target,units:'mil',inputUnits:request.units??'mm',executionId,requestedOperationCount:request.operations.length,expandedOperationCount:actions.length,batchCount:batches,counts,results,saved:false,...(transportError?{transportError}:{})};
+ const counts=results.reduce((a,r)=>(a[r.status]=(a[r.status]??0)+1,a),{}),output={ok:!transportError&&results.every(r=>r.status==='applied'),target:context.target,units:'mil',inputUnits:request.units??'mil',executionId,requestedOperationCount:request.operations.length,expandedOperationCount:actions.length,batchCount:batches,counts,results,saved:false,...(transportError?{transportError}:{})};
  if(request.save!==false&&!transportError&&!results.some(r=>r.status==='unknown'||r.error?.code==='TARGET_CHANGED')){try{output.saved=await (dependencies.save??saveDocument)(context.bridge,context.target);}catch(e){output.ok=false;output.saveError={code:e.code??'SAVE_FAILED',message:String(e.message)};}}
  if((request.view??'auto')!=='none'&&!transportError){
   try{const {scene}=await (dependencies.collect??collectScene)({target:context.target,geometry:true},context);const local=request.view==='board'?null:modifiedRegion(results,scene);output.view=await (dependencies.feedback??saveFeedback)(scene,{region:local,side:'both',pinLabels:request.view==='local'||request.view==='auto'&&!!local});}

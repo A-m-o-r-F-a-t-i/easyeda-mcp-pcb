@@ -1,10 +1,10 @@
-# EasyEDA PCB MCP 3.0.0
+# EasyEDA PCB MCP 3.0.1
 
 MCP-first typed wrappers for common EasyEDA PCB operations. The model supplies design intent; MCP handles object IDs, coordinate conversion, native signatures, bulk calls and factual feedback. No automatic placement or path search, no ordinary prepare/guard chain, and no design-approval gate.
 
 ## Default interface
 
-The default registry contains 21 tools. pcb_execute_plan accepts typed operations directly; pcb_execute_text_plan uses the same contract. Use designators, U1.12 pin endpoints and layer names. Input defaults to mm, while actual raw native geometry is explicitly labeled mil. Unspecified properties remain unchanged.
+The default registry contains 21 tools. pcb_execute_plan accepts typed operations directly; pcb_execute_text_plan uses the same contract. Use designators, U1.12 pin endpoints and layer names. Coordinate input, overview/pin data, picking, SVG regions and pick-and-place export default to mil; pass `units: "mm"` or `unit: "mm"` explicitly when metric input/output is required. Actual raw native geometry is explicitly labeled mil. Unspecified properties remain unchanged.
 
 Placement, transform/alignment/radial arrays, explicit routes/arcs, vias, holes/slots, pads, outlines, fill/pour/region geometry, text, modify/delete, cleanup, component insertion and copper-layer count are wrapped. Public batch arrays have no small fixed cap; transport byte/time slicing is internal and preserves order.
 

@@ -8,9 +8,11 @@ import {getToolRegistry,createPcbServer} from '../src/server.mjs';
 import {editSchema,expandOperations,catalog} from '../src/simple-contract.mjs';
 import {createNativeHelpers} from '../src/simple-native.mjs';
 import {simpleEditRuntime} from '../src/simple-runtime.mjs';
+import {simpleReadRuntime} from '../src/simple-utilities.mjs';
 import {collectSceneRuntime,buildOverview,padBounds} from '../src/component-overview.mjs';
 import {renderFeedbackSvg} from '../src/feedback-svg.mjs';
 import {applyEdits,codeFor,retainResult,readRetained} from '../src/simple-service.mjs';
+import {normalizeExportRequest} from '../src/manufacturing.mjs';
 const target={documentUuid:'pcb-test',projectUuid:'project-test',windowId:'window-test'};
 test('world-coordinate polygon pads are neither translated nor rotated twice',()=>{
  const p={primitiveId:'world-pad',padNumber:'1',net:'SIG',layer:1,x:110,y:210,rotation:90,pad:['POLYGON',[100,200,'L',120,200,120,220,100,220,100,200]],padGeometryFrame:'board'};
@@ -44,7 +46,8 @@ export function mockEda(count=2){
  for(let i=0;i<count;i++){const c=add('component',{designator:'U'+(i+1),name:'MCU',footprint:{name:'SOIC-2',uuid:'fp'},layer:1,x:i*100,y:0,rotation:0,primitiveLock:false});add('attribute',{parentPrimitiveId:c.primitiveId,key:'Designator',value:c.designator,keyVisible:false,valueVisible:true,layer:3,x:c.x,y:0});}
  return {eda,stores,calls,add};
 }
-const normalize=operations=>z.object(editSchema).strict().parse({operations,save:false,view:'none'});
+const normalize=operations=>z.object(editSchema).strict().parse({units:'mm',operations,save:false,view:'none'});
+const normalizeDefault=operations=>z.object(editSchema).strict().parse({operations,save:false,view:'none'});
 async function edit(env,operations){const request=normalize(operations);return simpleEditRuntime(env.eda,{target,units:request.units,executionId:'test-'+counter++,offset:0,operations:expandOperations(request.operations)},createNativeHelpers);}
 async function scene(env){return collectSceneRuntime(env.eda,{target,geometry:true},createNativeHelpers);}
 
@@ -52,6 +55,22 @@ test('v3 default registry exposes 21 simplified tools with no execution credenti
  assert.equal(getToolRegistry().size,21);createPcbServer();const schema=z.toJSONSchema(z.object(getToolRegistry().get('pcb_execute_plan').definition.inputSchema));
  for(const k of ['guard','expected','mode','phase','executionId'])assert.equal(k in schema.properties,false,k);
  assert.ok(schema.properties.operations.items);assert.ok(catalog().operations);assert.equal(schema.properties.operations.maxItems,undefined);
+});
+test('all public coordinate defaults are mil while explicit mm remains supported',async()=>{
+ const registry=getToolRegistry(),parse=name=>z.object(registry.get(name).definition.inputSchema).strict();
+ assert.equal(normalizeDefault([{op:'place',items:[{ref:'U1',at:[100,200]}]}]).units,'mil');
+ assert.equal(parse('pcb_read').parse({}).units,'mil');
+ assert.equal(parse('pcb_pick').parse({point:{x:100,y:200}}).units,'mil');
+ assert.equal(parse('pcb_inspect_pinmap').parse({refs:['U1']}).units,'mil');
+ assert.equal(parse('pcb_render_inspection_svg').parse({}).units,'mil');
+ assert.equal(catalog().units,'mil by default; pass units="mm" explicitly for metric input');
+ assert.equal(normalizeExportRequest({kind:'pickAndPlace'}).unit,'mil');
+ assert.equal(normalizeExportRequest({kind:'pickAndPlace',unit:'mm'}).unit,'mm');
+ assert.equal(normalize([{op:'place',items:[{ref:'U1',at:[1,2]}]}]).units,'mm');
+ const e=mockEda(),request=normalizeDefault([{op:'place',items:[{ref:'U1',at:[100,200]}]}]);
+ const result=await simpleEditRuntime(e.eda,{target,units:request.units,executionId:'default-mil-'+counter++,offset:0,operations:expandOperations(request.operations)},createNativeHelpers),component=[...e.stores.component.values()][0];
+ assert.equal(result.ok,true);assert.equal(component.x,100);assert.equal(component.y,200);
+ const status=await simpleReadRuntime(e.eda,{target,kind:'status'},createNativeHelpers);assert.equal(status.defaultInputUnits,'mil');
 });
 test('arbitrary angle and an explicit right corner are executed unchanged',async()=>{
  const e=mockEda();const r=await edit(e,[{op:'route',net:'SIG',layer:'top',width:0.25,items:[{points:[[0,0],[3,1.732],[3,4]]}]}]);
@@ -95,8 +114,8 @@ test('transform, align, distribute and radial preserve caller geometry',async()=
 test('duplicate designators are reported as ambiguity before any write',async()=>{
  const e=mockEda();[...e.stores.component.values()][1].designator='U1';const r=await edit(e,[{op:'place',items:[{ref:'U1',at:[1,1]}]}]);assert.equal(r.results[0].status,'failed');assert.equal(r.results[0].error.code,'AMBIGUOUS_COMPONENT');assert.equal(e.calls.length,0);
 });
-test('overview returns all components, footprint names, physical dimension sources and orientation nets',async()=>{
- const e=mockEda();const s=await scene(e),data=buildOverview(s,{angles:[30],orientationCoordinates:true});assert.equal(data.totalComponents,2);assert.equal(data.totalPads,4);assert.equal(data.components[0].footprint.name,'SOIC-2');assert.equal(data.components[0].dimensions.body.width,1.016);assert.equal(data.components[0].dimensions.assembly,null);assert.equal(data.components[0].orientations[0].sides.left[0].net,'SIG');assert.equal(data.components[0].orientations[1].pads.length,2);assert.equal(data.nets.length,2);
+test('overview defaults to mil and explicit mm still converts dimensions',async()=>{
+ const e=mockEda();const s=await scene(e),data=buildOverview(s,{angles:[30],orientationCoordinates:true}),metric=buildOverview(s,{units:'mm'});assert.equal(data.units,'mil');assert.equal(data.totalComponents,2);assert.equal(data.totalPads,4);assert.equal(data.components[0].footprint.name,'SOIC-2');assert.equal(data.components[0].dimensions.body.width,40);assert.equal(metric.components[0].dimensions.body.width,1.016);assert.equal(data.components[0].dimensions.assembly,null);assert.equal(data.components[0].orientations[0].sides.left[0].net,'SIG');assert.equal(data.components[0].orientations[1].pads.length,2);assert.equal(data.nets.length,2);
 });
 test('bottom pose orientation derives from actual pads without double-mirroring',async()=>{
  const e=mockEda();await edit(e,[{op:'place',items:[{ref:'U1',at:[10,8],side:'bottom',angle:90}]}]);const data=buildOverview(await scene(e),{angles:[90],orientationCoordinates:true});const c=data.components[0];assert.equal(c.side,'bottom');assert.ok(c.orientations[0].pads[0].offset[1]>0);assert.equal(c.orientations[0].pads[0].net,'SIG');

@@ -74,7 +74,7 @@ export function decodeManufacturingFile(payload, maxBytes, expectArchive) {
   return bytes;
 }
 
-function normalizeExportRequest(request) {
+export function normalizeExportRequest(request) {
   const kind = request.kind;
   const specs = {
     gerber: { extension: '.zip', format: null, expectArchive: true },
@@ -89,7 +89,7 @@ function normalizeExportRequest(request) {
   if (!['pickAndPlace', 'bom', 'testPoints'].includes(kind) && request.format !== undefined) throw Error(`format is not valid for ${kind}`);
   if (['pickAndPlace', 'bom', 'testPoints'].includes(kind) && request.format !== undefined && !['xlsx', 'csv'].includes(request.format)) throw Error('format must be xlsx or csv');
   if (kind !== 'pickAndPlace' && request.unit !== undefined) throw Error(`unit is not valid for ${kind}`);
-  const unit = kind === 'pickAndPlace' ? (request.unit ?? 'mm') : null;
+  const unit = kind === 'pickAndPlace' ? (request.unit ?? 'mil') : null;
   if (unit !== null && !['mm', 'mil'].includes(unit)) throw Error('Pick-and-place unit must be mm or mil');
   if (kind !== 'netlist' && request.netlistType !== undefined) throw Error(`netlistType is not valid for ${kind}`);
   const netlistMap = {

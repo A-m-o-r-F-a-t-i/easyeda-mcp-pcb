@@ -73,7 +73,7 @@ export function padBounds(p){
  return {minX:Math.min(...corners.map(x=>x[0])),maxX:Math.max(...corners.map(x=>x[0])),minY:Math.min(...corners.map(x=>x[1])),maxY:Math.max(...corners.map(x=>x[1]))};
 }
 const graphBounds=s=>s?merge(parseComplexPolygon(s).map(x=>x.bounds)):null;
-export function buildOverview(scene,{units='mm',refs,angles=[0,90,180,270],orientationCoordinates=false,region}={}){
+export function buildOverview(scene,{units='mil',refs,angles=[0,90,180,270],orientationCoordinates=false,region}={}){
  const scale=units==='mm'?0.0254:1,byParent=new Map(),nets=new Map();
  for(const p of scene.pads){const parent=p.parentPrimitiveId??p.componentPrimitiveId??p.parentComponentPrimitiveId;const arr=byParent.get(parent)??[];arr.push(p);byParent.set(parent,arr);}
  const allComponents=scene.components.map(c=>{
