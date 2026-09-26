@@ -1,4 +1,5 @@
 import {fileURLToPath} from 'node:url';
+import path from 'node:path';
 import {McpServer} from '@modelcontextprotocol/sdk/server/mcp.js';
 import {StdioServerTransport} from '@modelcontextprotocol/sdk/server/stdio.js';
 import * as z from 'zod/v4';
@@ -18,7 +19,7 @@ export function createPcbServer(){
  return server;
 }
 
-if(process.argv[1]&&fileURLToPath(import.meta.url)===fileURLToPath(new URL(`file:///${process.argv[1].replaceAll('\\','/')}`))){
+if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
  const server=createPcbServer(),transport=new StdioServerTransport();
  await server.connect(transport);
 }
