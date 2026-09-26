@@ -23,7 +23,6 @@ export async function compareAssociatedNetlistsRuntime(eda, request) {
       schematicUuid: board.schematic.uuid,
       schematicName: board.schematic.name ?? null,
     };
-    if (request.expectedSchematicUuid && association.schematicUuid !== request.expectedSchematicUuid) throw Error('Associated schematic UUID does not match expectedSchematicUuid');
     return { document, association };
   };
 
@@ -136,13 +135,13 @@ export async function compareAssociatedNetlistsRuntime(eda, request) {
   };
 }
 
-export async function compareAssociatedNetlists({ target, expectedSchematicUuid, offset = 0, limit = 100, bridgeUrl = null }) {
+export async function compareAssociatedNetlists({ target, offset = 0, limit = 100 }) {
   assertAllowedTarget(target);
   if (!target?.documentUuid || !target?.projectUuid || !target?.windowId) throw Error('Netlist comparison requires exact project/document/window');
   if (!Number.isInteger(offset) || offset < 0) throw Error('offset must be a nonnegative integer');
   if (!Number.isInteger(limit) || limit < 0 || limit > 1000) throw Error('limit must be 0..1000');
-  const bridge = await resolveBridge({ bridgeUrl, windowId: target.windowId, requireEda: true });
-  const request = { target, expectedSchematicUuid: expectedSchematicUuid ?? null, offset, limit };
+  const bridge = await resolveBridge({ windowId: target.windowId, requireEda: true });
+  const request = { target, offset, limit };
   const result = await executeBridgeCode(bridge, `return await (${compareAssociatedNetlistsRuntime.toString()})(eda,${JSON.stringify(request)});`, 180_000);
   return { ok: true, bridge: { baseUrl: bridge.baseUrl, windowId: bridge.windowId }, ...result };
 }

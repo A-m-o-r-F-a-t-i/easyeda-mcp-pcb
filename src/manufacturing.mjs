@@ -29,7 +29,7 @@ export async function manufacturingFileRuntime(eda, request) {
   if (!method || typeof api[method] !== 'function') throw Error(`Manufacturing export API unavailable for ${request.kind}`);
   let file;
   if (request.kind === 'gerber') file = await api.getGerberFile(request.fileName);
-  else if (request.kind === 'pickAndPlace') file = await api.getPickAndPlaceFile(request.fileName, request.format, request.unit);
+  else if (request.kind === 'pickAndPlace') file = await api.getPickAndPlaceFile(request.fileName, request.format, 'mil');
   else if (request.kind === 'bom') file = await api.getBomFile(request.fileName, request.format);
   else if (request.kind === 'testPoints') file = await api.getTestPointFile(request.fileName, request.format);
   else if (request.kind === 'netlist') file = await api.getNetlistFile(request.fileName, request.netlistType);
@@ -56,7 +56,7 @@ export async function manufacturingFileRuntime(eda, request) {
     size: bytes.length,
     kind: request.kind,
     format: request.format ?? null,
-    unit: request.unit ?? null,
+    unit: request.kind === 'pickAndPlace' ? 'mil' : null,
     netlistType: request.netlistType ?? null,
     archive: request.expectArchive,
     encoding: 'base64',
@@ -88,9 +88,7 @@ export function normalizeExportRequest(request) {
   if (!spec) throw Error('Unsupported manufacturing export kind');
   if (!['pickAndPlace', 'bom', 'testPoints'].includes(kind) && request.format !== undefined) throw Error(`format is not valid for ${kind}`);
   if (['pickAndPlace', 'bom', 'testPoints'].includes(kind) && request.format !== undefined && !['xlsx', 'csv'].includes(request.format)) throw Error('format must be xlsx or csv');
-  if (kind !== 'pickAndPlace' && request.unit !== undefined) throw Error(`unit is not valid for ${kind}`);
-  const unit = kind === 'pickAndPlace' ? (request.unit ?? 'mil') : null;
-  if (unit !== null && !['mm', 'mil'].includes(unit)) throw Error('Pick-and-place unit must be mm or mil');
+  const unit = kind === 'pickAndPlace' ? 'mil' : null;
   if (kind !== 'netlist' && request.netlistType !== undefined) throw Error(`netlistType is not valid for ${kind}`);
   const netlistMap = {
     JLCEDA_PRO: 'JLCEDA',
@@ -115,7 +113,7 @@ export async function exportManufacturingFile(request) {
   if (!parent.isDirectory() || parent.isSymbolicLink()) throw Error('Manufacturing export parent must be an existing regular directory');
   try { await fs.lstat(request.outputPath); throw Error('Manufacturing export destination already exists; overwrite is not supported'); }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
-  const bridge = await resolveBridge({ bridgeUrl: request.bridgeUrl, windowId: request.target.windowId, requireEda: true });
+  const bridge = await resolveBridge({ windowId: request.target.windowId, requireEda: true });
   const runtimeRequest = {
     target: request.target,
     kind: request.kind,

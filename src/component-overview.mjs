@@ -1,8 +1,8 @@
-import { parseComplexPolygon } from './vector-inspection.mjs';
+import {parseComplexPolygon} from './polygon-path.mjs';
 
 /** One inventory read. Optional geometry failures are disclosed, never silently empty. */
 export async function collectSceneRuntime(eda, request, factory) {
- const h=factory(eda,{...request,units:'mil'}),identity=await h.checkTarget();
+ const h=factory(eda,request),identity=await h.checkTarget();
  const data={document:identity.document,project:identity.project,units:'mil',components:[],pads:[],layers:[],coverage:{passes:1,atomic:false,missing:[],warnings:[]}};
  data.clientVersion=await eda.sys_Environment?.getEditorCurrentVersion?.()??null;
  data.canvasOrigin=await eda.pcb_Document?.getCanvasOrigin?.()??null;
@@ -73,8 +73,8 @@ export function padBounds(p){
  return {minX:Math.min(...corners.map(x=>x[0])),maxX:Math.max(...corners.map(x=>x[0])),minY:Math.min(...corners.map(x=>x[1])),maxY:Math.max(...corners.map(x=>x[1]))};
 }
 const graphBounds=s=>s?merge(parseComplexPolygon(s).map(x=>x.bounds)):null;
-export function buildOverview(scene,{units='mil',refs,angles=[0,90,180,270],orientationCoordinates=false,region}={}){
- const scale=units==='mm'?0.0254:1,byParent=new Map(),nets=new Map();
+export function buildOverview(scene,{refs,angles=[0,90,180,270],orientationCoordinates=false,region}={}){
+ const scale=1,byParent=new Map(),nets=new Map();
  for(const p of scene.pads){const parent=p.parentPrimitiveId??p.componentPrimitiveId??p.parentComponentPrimitiveId;const arr=byParent.get(parent)??[];arr.push(p);byParent.set(parent,arr);}
  const allComponents=scene.components.map(c=>{
   const pads=(byParent.get(c.primitiveId)??[]).map(p=>{
@@ -94,5 +94,5 @@ export function buildOverview(scene,{units='mil',refs,angles=[0,90,180,270],orie
  if(refs){for(const ref of refs)if(allComponents.filter(c=>c.ref===ref||c.id===ref).length!==1)throw Error('Component selector missing or ambiguous: '+ref);components=allComponents.filter(c=>refs.includes(c.ref)||refs.includes(c.id));}
  if(region)components=components.filter(c=>{const b=c.dimensions.padEnvelope??c.dimensions.nativeGraphics;return b?b.maxX>=Math.min(region.left,region.right)&&b.minX<=Math.max(region.left,region.right)&&b.maxY>=Math.min(region.top,region.bottom)&&b.minY<=Math.max(region.top,region.bottom):c.at[0]>=Math.min(region.left,region.right)&&c.at[0]<=Math.max(region.left,region.right)&&c.at[1]>=Math.min(region.top,region.bottom)&&c.at[1]<=Math.max(region.top,region.bottom);});
  for(const p of scene.pads.filter(p=>!(p.parentPrimitiveId??p.componentPrimitiveId??p.parentComponentPrimitiveId)))if(p.net){const arr=nets.get(p.net)??[];arr.push({ref:null,pin:p.padNumber??'',padId:p.primitiveId,at:[round(p.x*scale),round(p.y*scale)]});nets.set(p.net,arr);}
- return {schema:'easyeda-pcb-overview/v3',target:{documentUuid:scene.document.uuid,projectUuid:scene.project?.uuid},units,coordinateSystem:{frame:'native board XY, +Y upward',view:'top observation',poseLocal:'inverse current rotation of actual board-pad offsets; retains the current side/mirror',orientationPrediction:'same-side rotations only; after a native flip read actual pads, do not mirror a second time'},totalComponents:allComponents.length,returnedComponents:components.length,totalPads:scene.pads.length,layers:scene.layers,components,nets:[...nets].map(([net,endpoints])=>({net,endpoints})),mechanical:{units:'mil',outline:(scene.polylines??[]).filter(x=>x.layer===11),regions:scene.regions??[],holes:scene.pads.filter(x=>x.layer===12&&x.metallization===false)},coverage:{...scene.coverage,dimensionSources:{body:'native layer 48 graphical outline; unknown if absent',assembly:'native layer 9/10 graphical outline',silkscreen:'native layer 3/4 graphical outline',nativeGraphics:'native BBox, not a mechanical body',padEnvelope:'rotated pad shape envelope'},sideGrouping:'direction from component origin, not a physical courtyard assertion'}};
+ return {schema:'easyeda-pcb-overview/v4',target:{documentUuid:scene.document.uuid,projectUuid:scene.project?.uuid},units:'mil',coordinateSystem:{frame:'native board XY, +Y upward',view:'top observation',poseLocal:'inverse current rotation of actual board-pad offsets; retains the current side/mirror',orientationPrediction:'same-side rotations only; after a native flip read actual pads, do not mirror a second time'},totalComponents:allComponents.length,returnedComponents:components.length,totalPads:scene.pads.length,layers:scene.layers,components,nets:[...nets].map(([net,endpoints])=>({net,endpoints})),mechanical:{units:'mil',outline:(scene.polylines??[]).filter(x=>x.layer===11),regions:scene.regions??[],holes:scene.pads.filter(x=>x.layer===12&&x.metallization===false)},coverage:{...scene.coverage,dimensionSources:{body:'native layer 48 graphical outline; unknown if absent',assembly:'native layer 9/10 graphical outline',silkscreen:'native layer 3/4 graphical outline',nativeGraphics:'native BBox, not a mechanical body',padEnvelope:'rotated pad shape envelope'},sideGrouping:'direction from component origin, not a physical courtyard assertion'}};
 }

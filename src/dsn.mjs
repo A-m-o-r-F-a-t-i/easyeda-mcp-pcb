@@ -1,4 +1,5 @@
-import { hashBytes } from './gateway-client.mjs';
+import crypto from 'node:crypto';
+const hashBytes=value=>crypto.createHash('sha256').update(value).digest('hex');
 
 export function tokenizeSExpression(text, { maximumBytes = 12582912, maximumTokens = 2000000 } = {}) {
   if (typeof text !== 'string' || Buffer.byteLength(text, 'utf8') > maximumBytes) throw new Error('DSN text exceeds its byte limit');
@@ -80,12 +81,12 @@ export function parseDsnScene(text) {
   const resolutionNode = child(root, 'resolution');
   const explicitUnit = child(root, 'unit')?.[1];
   const sourceUnit = name(explicitUnit ?? resolutionNode?.[1], 'unit').toLowerCase();
-  const scaleMm = { mm: 1, mil: 0.0254, inch: 25.4, in: 25.4, um: 0.001, cm: 10 }[sourceUnit];
-  if (!scaleMm) throw new Error(`Unsupported DSN unit ${sourceUnit}`);
+  const scaleMil = { mm: 1 / 0.0254, mil: 1, inch: 1000, in: 1000, um: 1 / 25.4, cm: 10 / 0.0254 }[sourceUnit];
+  if (!scaleMil) throw new Error(`Unsupported DSN unit ${sourceUnit}`);
   if (explicitUnit && resolutionNode && explicitUnit.toLowerCase() !== resolutionNode[1].toLowerCase()) throw new Error('Conflicting DSN unit and resolution declarations');
   const resolution = resolutionNode ? number(resolutionNode[2], 'resolution') : null;
   if (resolution !== null && resolution <= 0) throw new Error('DSN resolution must be positive');
-  const length = (value, label) => number(value, label) * scaleMm;
+  const length = (value, label) => number(value, label) * scaleMil;
   const warnings = [];
   function shape(node) {
     const type = keyword(node);
@@ -161,7 +162,7 @@ export function parseDsnScene(text) {
   }
   const vias = children(wiring, 'via').map((node, index) => ({ id: `via-${index}`, padstackId: name(node[1], 'via padstack'), x: length(node[2], 'via x'), y: length(node[3], 'via y'), net: child(node, 'net')?.[1] ?? null, layers: stackMap.get(node[1])?.shapes.map(item => item.layer).filter(Boolean) ?? [] }));
   const scene = {
-    schema: 'easyeda-route-scene/v1', sourceSha256: hashBytes(Buffer.from(text, 'utf8')), boardName: root[1], units: 'mm', sourceUnits: sourceUnit, resolution,
+    schema: 'easyeda-route-scene/v4', sourceSha256: hashBytes(Buffer.from(text, 'utf8')), boardName: root[1], units: 'mil', sourceUnits: sourceUnit, resolution,
     coordinateFrame: 'DSN export coordinates', apiCoordinateTransform: null,
     boardOutline, layers, rules: children(structure, 'rule'), components, images, padstacks, pads, nets, tracks, vias,
     coverage: { syntaxValid: true, frontPlacementTransforms: true, backPlacementTransforms: false, pouredCopper: false, nativeComponentIdentity: false, unresolvedNetPins, warnings },

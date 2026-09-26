@@ -1,27 +1,11 @@
-# Bundled third-party code
+# Third-party dependencies
 
-The portable SHA-256 factory is generated from @noble/hashes 2.4.0. Source: https://github.com/paulmillr/noble-hashes . It retains the MIT license below.
+Production dependencies are pinned in package-lock.json. Their original licenses are retained in the installed dependency directories.
 
-```text
-The MIT License (MIT)
+| Package | Use | License |
+| --- | --- | --- |
+| @modelcontextprotocol/sdk | MCP transport and schemas | MIT |
+| zod | Typed input validation | MIT |
+| polygon-clipping 0.15.7 | Boolean operations on copper polygons and holes | MIT |
 
-Copyright (c) 2022 Paul Miller (https://paulmillr.com)
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the “Software”), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
-```
+The removed legacy portable SHA-256 factory is no longer shipped. Request deduplication uses Node.js built-in crypto. No third-party source has been copied without its package license; inspect the lockfile for transitive dependencies.

@@ -1,354 +1,96 @@
-import { contextRpc, executionContextFor } from './execution-context.mjs';
-import fs from 'node:fs/promises';
-import path from 'node:path';
-import { buildBatchCode, buildReadCode } from './runtime.mjs';
-import { planSummary, validatePlan } from './plan.mjs';
-import { buildDrcStartCode, buildDrcStatusCode, createDrcJobId, waitForDrcJob } from './drc-job.mjs';
+import {buildDrcStartCode,buildDrcStatusCode,createDrcJobId,waitForDrcJob} from './drc-job.mjs';
 
-const MIN_PORT = 49620;
-const MAX_PORT = 49629;
-const DEFAULT_TIMEOUT_MS = 65_000;
-const MAX_PLAN_BYTES = 8 * 1024 * 1024;
+const MIN_PORT=49620;
+const MAX_PORT=49629;
+const DEFAULT_TIMEOUT_MS=65_000;
 
-function fail(message, details) {
-  const error = new Error(message);
-  if (details !== undefined) error.details = details;
-  throw error;
+function fail(message,details,code){const error=new Error(message);if(details!==undefined)error.details=details;if(code)error.code=code;throw error;}
+
+export function normalizeBridgeUrl(value){
+ if(value==null||value==='')return null;
+ let parsed;try{parsed=new URL(value);}catch{fail('EASYEDA_BRIDGE_URL must be a valid URL');}
+ const port=Number(parsed.port);
+ if(parsed.protocol!=='http:'||!['127.0.0.1','localhost'].includes(parsed.hostname)||!Number.isInteger(port)||port<MIN_PORT||port>MAX_PORT||parsed.pathname!=='/'||parsed.search||parsed.hash||parsed.username||parsed.password)fail(`EASYEDA_BRIDGE_URL must be http://127.0.0.1:${MIN_PORT}-${MAX_PORT}`);
+ return parsed.origin;
 }
 
-export function normalizeBridgeUrl(value) {
-  if (value == null || value === '') return null;
-  let parsed;
-  try { parsed = new URL(value); } catch { fail('bridgeUrl must be a valid URL'); }
-  const port = Number(parsed.port);
-  if (parsed.protocol !== 'http:' || !['127.0.0.1', 'localhost'].includes(parsed.hostname) ||
-      !Number.isInteger(port) || port < MIN_PORT || port > MAX_PORT ||
-      parsed.pathname !== '/' || parsed.search || parsed.hash || parsed.username || parsed.password) {
-    fail(`bridgeUrl must be http://127.0.0.1:${MIN_PORT}-${MAX_PORT} (localhost is also accepted)`);
-  }
-  return parsed.origin;
+export async function fetchJson(url,options={},timeoutMs=DEFAULT_TIMEOUT_MS){
+ const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeoutMs);
+ try{
+  const response=await fetch(url,{...options,signal:controller.signal}),maximumResponseBytes=64*1024*1024,declared=Number(response.headers?.get?.('content-length'));
+  if(Number.isFinite(declared)&&declared>maximumResponseBytes){await response.body?.cancel?.();fail('Bridge response exceeds byte limit');}
+  let text;
+  if(response.body?.getReader){const reader=response.body.getReader(),chunks=[];let bytes=0;try{for(;;){const {done,value}=await reader.read();if(done)break;bytes+=value.length;if(bytes>maximumResponseBytes){await reader.cancel();fail('Bridge response exceeds byte limit');}chunks.push(Buffer.from(value));}}finally{reader.releaseLock();}text=Buffer.concat(chunks).toString('utf8');}
+  else{text=await response.text();if(Buffer.byteLength(text,'utf8')>maximumResponseBytes)fail('Bridge response exceeds byte limit');}
+  let body;try{body=text?JSON.parse(text):{};}catch{fail(`Bridge returned non-JSON data from ${url}`,{preview:text.slice(0,300)});}
+  if(!response.ok){const payload=body?.error,error=new Error(`Bridge HTTP ${response.status}: ${String(payload?.message??payload??body?.message??'request failed').slice(0,1500)}`);error.code=payload?.code??'BRIDGE_HTTP_ERROR';error.details=payload?.details??body;throw error;}
+  return body;
+ }catch(error){if(error?.name==='AbortError')fail(`Bridge request timed out after ${timeoutMs} ms: ${url}`,{outcome:'unknown',requiresReadbackBeforeRetry:true},'REQUEST_TIMEOUT');throw error;}finally{clearTimeout(timer);}
 }
 
-export async function fetchJson(url, options = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(url, { ...options, signal: controller.signal });
-    const maximumResponseBytes = 64 * 1024 * 1024;
-    const declared = Number(response.headers?.get?.('content-length'));
-    if (Number.isFinite(declared) && declared > maximumResponseBytes) { await response.body?.cancel?.(); fail('Bridge response exceeds byte limit'); }
-    let text;
-    if (response.body?.getReader) {
-      const reader = response.body.getReader(); const chunks = []; let bytes = 0;
-      try { for (;;) { const { done, value } = await reader.read(); if (done) break; bytes += value.length; if (bytes > maximumResponseBytes) { await reader.cancel(); fail('Bridge response exceeds byte limit'); } chunks.push(Buffer.from(value)); } }
-      finally { reader.releaseLock(); }
-      text = Buffer.concat(chunks).toString('utf8');
-    } else { text = await response.text(); if (Buffer.byteLength(text, 'utf8') > maximumResponseBytes) fail('Bridge response exceeds byte limit'); }
-    let body;
-    try { body = text ? JSON.parse(text) : {}; }
-    catch { fail(`Bridge returned non-JSON data from ${url}`, { preview: text.slice(0, 300) }); }
-    if (!response.ok) { const payload = body?.error; const error = new Error(`Bridge HTTP ${response.status}: ${String(payload?.message ?? payload ?? body?.message ?? 'request failed').slice(0, 1500)}`); error.code = payload?.code ?? 'BRIDGE_HTTP_ERROR'; error.details = payload?.details ?? body; throw error; }
-    return body;
-  } catch (error) {
-    if (error?.name === 'AbortError') { const timeout = new Error(`Bridge request timed out after ${timeoutMs} ms: ${url}`); timeout.code = 'REQUEST_TIMEOUT'; timeout.details = { outcome: 'unknown', requiresReadbackBeforeRetry: true }; throw timeout; }
-    throw error;
-  } finally { clearTimeout(timer); }
+export async function resolveBridge({windowId=null,requireEda=true}={}){
+ const explicit=normalizeBridgeUrl(process.env.EASYEDA_BRIDGE_URL??null),candidates=explicit?[explicit]:Array.from({length:MAX_PORT-MIN_PORT+1},(_,i)=>`http://127.0.0.1:${MIN_PORT+i}`),failures=[];
+ for(const baseUrl of candidates){
+  try{
+   const health=await fetchJson(`${baseUrl}/health`,{},explicit?2500:1200);
+   if(health?.service!=='easyeda-bridge'){failures.push({baseUrl,error:'service identifier mismatch'});continue;}
+   if(requireEda&&!health.edaConnected)fail('EasyEDA Bridge is running, but no EasyEDA window is connected');
+   const listing=requireEda?await fetchJson(`${baseUrl}/eda-windows`,{},2500):null,connected=listing?.windows?.filter(item=>item.connected===true)??[];
+   if(requireEda&&!windowId&&connected.length>1)fail('Multiple EasyEDA windows are connected; specify an exact PCB document UUID');
+   if(requireEda&&windowId&&!connected.some(item=>item.windowId===windowId))fail('Exact EasyEDA window is not connected',{windowId});
+   const resolvedWindowId=windowId??(requireEda?connected[0]?.windowId:null)??null;
+   if(requireEda&&!resolvedWindowId)fail('No connected EasyEDA window');
+   return {baseUrl,health,windowId:resolvedWindowId};
+  }catch(error){if(explicit)throw error;failures.push({baseUrl,error:String(error?.message??error)});}
+ }
+ fail(`No EasyEDA Bridge found on 127.0.0.1:${MIN_PORT}-${MAX_PORT}`,{failures});
 }
 
-export async function resolveBridge({ bridgeUrl = null, windowId = null, requireEda = true } = {}) {
-  const explicit = normalizeBridgeUrl(bridgeUrl ?? process.env.EASYEDA_BRIDGE_URL ?? null);
-  const candidates = explicit ? [explicit] : Array.from({ length: MAX_PORT - MIN_PORT + 1 }, (_, i) => `http://127.0.0.1:${MIN_PORT + i}`);
-  const failures = [];
-  for (const baseUrl of candidates) {
-    try {
-      const health = await fetchJson(`${baseUrl}/health`, {}, explicit ? 2_500 : 1_200);
-      if (health?.service !== 'easyeda-bridge') { failures.push({ baseUrl, error: 'service identifier mismatch' }); continue; }
-      if (requireEda && !health.edaConnected) fail('EasyEDA Bridge is running, but no EasyEDA window is connected');
-      const listing = requireEda ? await fetchJson(`${baseUrl}/eda-windows`, {}, 2500) : null;
-      const connected = listing?.windows?.filter(item => item.connected === true) ?? [];
-      if (requireEda && !windowId && connected.length > 1) fail('Multiple EasyEDA windows are connected; target.windowId is required');
-      if (requireEda && windowId && !connected.some(item => item.windowId === windowId)) fail('Explicit EasyEDA window is not connected; no active-window fallback', { windowId });
-      const resolvedWindowId = windowId ?? (requireEda ? connected[0]?.windowId : null) ?? null;
-      if (requireEda && !resolvedWindowId) fail('No connected EasyEDA window; rediscover exact target');
-      return { baseUrl, health, windowId: resolvedWindowId };
-    } catch (error) {
-      if (explicit) throw error;
-      failures.push({ baseUrl, error: String(error?.message ?? error) });
-    }
-  }
-  fail(`No EasyEDA Bridge found on 127.0.0.1:${MIN_PORT}-${MAX_PORT}`, { failures });
+export async function executeBridgeCode(bridge,code,timeoutMs=DEFAULT_TIMEOUT_MS){
+ const body={code};if(bridge.windowId)body.windowId=bridge.windowId;
+ const payload=await fetchJson(`${bridge.baseUrl}/execute`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)},timeoutMs);
+ if(!payload?.success)fail(payload?.error??'EasyEDA Bridge execution failed',payload);
+ if(bridge.windowId&&payload.windowId&&payload.windowId!==bridge.windowId)fail('Bridge response window mismatch; inspect actual state before retry');
+ return payload.result;
 }
 
-export async function executeBridgeCode(bridge, code, timeoutMs = DEFAULT_TIMEOUT_MS) {
-  const body = { code };
-  if (bridge.windowId) body.windowId = bridge.windowId;
-  const payload = await fetchJson(`${bridge.baseUrl}/execute`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-  }, timeoutMs);
-  if (!payload?.success) fail(payload?.error ?? 'EasyEDA Bridge execution failed', payload);
-  if (bridge.windowId && payload.windowId && payload.windowId !== bridge.windowId) fail('Bridge response window mismatch; inspect actual state before retry');
-  return payload.result;
+export function assertAllowedTarget(target){
+ const config=process.env.EASYEDA_ALLOWED_PROJECT_UUIDS;if(!config)return;
+ let allowed;try{allowed=JSON.parse(config);}catch{fail('EASYEDA_ALLOWED_PROJECT_UUIDS must be a JSON string array');}
+ if(!Array.isArray(allowed)||!allowed.length||!allowed.every(item=>typeof item==='string'&&item.trim()))fail('EASYEDA_ALLOWED_PROJECT_UUIDS must be a nonempty JSON string array');
+ if(!target?.projectUuid||!target?.windowId||!allowed.includes(target.projectUuid))fail('Target outside configured project scope');
 }
 
-export function assertAllowedTarget(target) {
-  const config = process.env.EASYEDA_ALLOWED_PROJECT_UUIDS;
-  if (!config) return;
-  let allowed;
-  try { allowed = JSON.parse(config); } catch { fail('EASYEDA_ALLOWED_PROJECT_UUIDS must be a JSON string array'); }
-  if (!Array.isArray(allowed) || !allowed.length || !allowed.every(item => typeof item === 'string' && item.trim())) fail('EASYEDA_ALLOWED_PROJECT_UUIDS must be a nonempty JSON string array');
-  if (!target?.projectUuid || !target?.windowId || !allowed.includes(target.projectUuid)) fail('Target outside configured project scope, or missing explicit projectUuid/windowId');
+const statusCode=target=>`const d=await eda.dmt_SelectControl.getCurrentDocumentInfo();const p=await eda.dmt_Project.getCurrentProjectInfo();if(d?.uuid!==${JSON.stringify(target.documentUuid)}||d?.documentType!==3)throw Error('PCB document/type mismatch');if(p?.uuid!==${JSON.stringify(target.projectUuid)})throw Error('PCB project mismatch');return {document:d,project:{uuid:p.uuid,name:p.friendlyName??p.name},canvasOrigin:await eda.pcb_Document.getCanvasOrigin(),clientVersion:await eda.sys_Environment?.getEditorCurrentVersion?.()??null};`;
+
+export async function saveDocument(bridge,target){
+ assertAllowedTarget(target);
+ const code=`const d=await eda.dmt_SelectControl.getCurrentDocumentInfo();const p=await eda.dmt_Project.getCurrentProjectInfo();if(d?.uuid!==${JSON.stringify(target.documentUuid)}||d?.documentType!==3||p?.uuid!==${JSON.stringify(target.projectUuid)})throw Error('PCB target changed before save');return await eda.pcb_Document.save(${JSON.stringify(target.documentUuid)});`;
+ const saved=await executeBridgeCode(bridge,code);if(saved!==true)fail('EasyEDA save was not acknowledged');return true;
 }
 
-export function requiresMcpOwnedRead(request) {
-  const directKinds = new Set(['pins', 'auditSnapshot', 'poured', 'polylines']);
-  if (directKinds.has(request?.kind)) return true;
-  if (request?.kind !== 'snapshot' || !Array.isArray(request.include)) return false;
-  return request.include.some(kind => kind === 'poured' || kind === 'polylines');
-}
-
-export async function readPcb(request, options = {}) {
-  assertAllowedTarget(request?.target);
-  const context = request?.target ? executionContextFor(request.target) : null;
-  // Read-only pin/audit adapters are MCP-owned so older Gateway runtimes cannot reintroduce raw footprint-hole units.
-  if (requiresMcpOwnedRead(request)) {
-    const bridge=context?.session.bridge??await resolveBridge({bridgeUrl:options.bridgeUrl,windowId:request.target?.windowId,requireEda:true});
-    const result=await executeBridgeCode(bridge,buildReadCode(request),options.timeoutMs??DEFAULT_TIMEOUT_MS);
-    return {bridge:{baseUrl:bridge.baseUrl,windowId:bridge.windowId},readImplementation:'mcp-owned-geometry-readback',result};
-  }
-  if (context) return { bridge: { baseUrl: context.session.bridge.baseUrl, windowId: context.session.target.windowId }, result: (await contextRpc('pcb.read', { request })).result };
-  if (request?.target?.windowId && request?.target?.projectUuid) {
-    const { connectGateway } = await import('./gateway-client.mjs');
-    const session = await connectGateway({ target: request.target, bridgeUrl: options.bridgeUrl });
-    if (session.protocolVersion === 2) return { bridge: { baseUrl: session.bridge.baseUrl, windowId: session.target.windowId, protocolVersion: 2 }, result: (await session.rpc('pcb.read', { request })).result };
-  }
-  const bridge = await resolveBridge({ bridgeUrl: options.bridgeUrl, windowId: request?.target?.windowId ?? options.windowId, requireEda: true });
-  return {
-    bridge: { baseUrl: bridge.baseUrl, windowId: bridge.windowId },
-    result: await executeBridgeCode(bridge, buildReadCode(request), options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
-  };
-}
-
-export async function loadPlanSource({ planPath, plan }, {maxBytes=MAX_PLAN_BYTES}={}) {
-  if(!Number.isInteger(maxBytes)||maxBytes<1||maxBytes>33554432) fail('Invalid JSON source size limit');
-  if ((planPath == null) === (plan == null)) fail('Provide exactly one of planPath or plan');
-  if (plan != null) {let serialized;try{serialized=JSON.stringify(plan);}catch{fail('Inline JSON source is not serializable');}if(typeof serialized!=='string')fail('Inline JSON source is not serializable');if(Buffer.byteLength(serialized,'utf8')>maxBytes)fail(`JSON source exceeds ${maxBytes} bytes`);return { source: 'inline', raw: plan };}
-  if (typeof planPath !== 'string' || !planPath.trim()) fail('planPath must be a non-empty path');
-  if (!path.isAbsolute(planPath)) fail('planPath must be an absolute path; relative paths are not resolved against the MCP installation directory');
-  const absolutePath = path.resolve(planPath);
-  if (path.extname(absolutePath).toLowerCase() !== '.json') fail('planPath must point to a .json file');
-  const stat = await fs.stat(absolutePath);
-  if (!stat.isFile()) fail('planPath must point to a regular file');
-  if (stat.size > maxBytes) fail(`JSON source exceeds ${maxBytes} bytes`);
-  const bytes = await fs.readFile(absolutePath);
-  if(bytes.length>maxBytes)fail(`JSON source exceeds ${maxBytes} bytes after read`);
-  const text=bytes.toString('utf8').replace(/^\uFEFF/,'');
-  let raw;
-  try { raw = JSON.parse(text); } catch (error) { fail(`Plan JSON parsing failed: ${error.message}`); }
-  return { source: absolutePath, raw };
-}
-
-export async function validatePlanSource(source) {
-  const loaded = await loadPlanSource(source);
-  const normalized = validatePlan(loaded.raw);
-  return { loaded, normalized, summary: planSummary(normalized) };
-}
-
-function batchesOf(items, size) {
-  const batches = [];
-  for (let index = 0; index < items.length; index += size) batches.push(items.slice(index, index + size));
-  return batches;
-}
-
-export async function saveDocument(bridge, target) {
-  assertAllowedTarget(target);
-  if (executionContextFor(target)) return (await contextRpc('pcb.save', {}, { write: true })).result.saved;
-  const code = `const d=await eda.dmt_SelectControl.getCurrentDocumentInfo();if(d?.uuid!==${JSON.stringify(target.documentUuid)}||d?.documentType!==3)throw new Error('PCB document/type mismatch before save');if(${JSON.stringify(target.projectUuid ?? null)}&&(await eda.dmt_Project.getCurrentProjectInfo())?.uuid!==${JSON.stringify(target.projectUuid ?? null)})throw new Error('PCB project mismatch before save');return await eda.pcb_Document.save(${JSON.stringify(target.documentUuid)});`;
-  const saved = await executeBridgeCode(bridge, code);
-  if (!saved) fail('EasyEDA save returned false');
-  return saved;
-}
-
-export async function executePlanSource(source, { bridgeUrl = null } = {}) {
-  const { loaded, normalized, summary } = await validatePlanSource(source);
-  assertAllowedTarget(normalized.target);
-  const bridge = await resolveBridge({ bridgeUrl, windowId: normalized.target.windowId, requireEda: true });
-  const preflight = await executeBridgeCode(bridge, buildReadCode({ kind: 'status', target: normalized.target }));
-  const batches = batchesOf(normalized.operations, normalized.options.batchSize);
-  const results = [];
-  let requiresRepour = false;
-  for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
-    const batchResult = await executeBridgeCode(bridge, buildBatchCode({
-      target: normalized.target, toleranceMil: normalized.options.toleranceMil, operations: batches[batchIndex],
-    }));
-    results.push(...(batchResult?.results ?? []));
-    requiresRepour ||= Boolean((batchResult?.results ?? []).some(item => item.requiresRepour));
-    if (!batchResult?.ok) fail(`PCB plan stopped in batch ${batchIndex + 1}: ${batchResult?.error?.message ?? 'unknown operation error'}`, {
-      source: loaded.source, summary, batchIndex, completedOperationCount: results.length, results, error: batchResult?.error ?? null,
-    });
-    if (normalized.options.saveAfterBatch) await saveDocument(bridge, normalized.target);
-  }
-  if (!normalized.options.saveAfterBatch) await saveDocument(bridge, normalized.target);
-  return {
-    ok: true, source: loaded.source, bridge: { baseUrl: bridge.baseUrl, windowId: bridge.windowId }, preflight, summary,
-    batchCount: batches.length, completedOperationCount: results.length,
-    resultCounts: results.reduce((acc, item) => { acc[item.status] = (acc[item.status] ?? 0) + 1; return acc; }, {}),
-    requiresRepour, results,
-  };
-}
-
-export async function saveAndCheck({
-  target,
-  bridgeUrl = null,
-  save,
-  runDrc = true,
-  drcJobId = null,
-  drcWaitMs = 15000,
-  drcPollIntervalMs = 300,
-  drcDetailOffset = 0,
-  drcDetailLimit = 100,
-  releaseDrcJob = false,
-}) {
-  if (!target?.documentUuid) fail('target.documentUuid is required');
-  if (drcJobId != null && (typeof drcJobId !== 'string' || !drcJobId.trim())) fail('drcJobId must be a non-empty string');
-  if (!Number.isSafeInteger(drcDetailOffset) || drcDetailOffset < 0) fail('drcDetailOffset must be a non-negative integer');
-  if (!Number.isSafeInteger(drcDetailLimit) || drcDetailLimit < 0 || drcDetailLimit > 250) fail('drcDetailLimit must be an integer from 0 to 250');
-  if (!Number.isSafeInteger(drcWaitMs) || drcWaitMs < 0 || drcWaitMs > 45000) fail('drcWaitMs must be an integer from 0 to 45000');
-  if (!Number.isSafeInteger(drcPollIntervalMs) || drcPollIntervalMs < 100 || drcPollIntervalMs > 2000) fail('drcPollIntervalMs must be an integer from 100 to 2000');
-  if (typeof releaseDrcJob !== 'boolean') fail('releaseDrcJob must be boolean');
-  const resuming = drcJobId != null;
-  const shouldSave = save ?? !resuming;
-  if (resuming && shouldSave) fail('A DRC continuation must use save=false so the checked board cannot be changed before result retrieval');
-  if (!runDrc && resuming) fail('drcJobId requires runDrc=true');
-
-  assertAllowedTarget(target);
-  const bridge = await resolveBridge({ bridgeUrl, windowId: target.windowId, requireEda: true });
-  const status = await executeBridgeCode(bridge, buildReadCode({ kind: 'status', target }));
-  let saved = null;
-  if (shouldSave) saved = await saveDocument(bridge, target);
-
-  if (!runDrc) {
-    return {
-      ok: true,
-      bridge: { baseUrl: bridge.baseUrl, windowId: bridge.windowId },
-      status,
-      saved,
-      drcState: 'NOT_REQUESTED',
-      drcJobId: null,
-      drcVerified: false,
-      drcOperationalSuccess: null,
-      drcErrorCount: null,
-      drcPassed: null,
-      drcItems: null,
-      drcSummary: null,
-      rawNativeDrcOmitted: true,
-    };
-  }
-
-  let effectiveJobId = drcJobId ?? createDrcJobId();
-  const readJob = () => executeBridgeCode(bridge, buildDrcStatusCode({
-    target,
-    jobId: effectiveJobId,
-    offset: drcDetailOffset,
-    limit: drcDetailLimit,
-    release: releaseDrcJob,
-  }), 20_000);
-  let initial;
-  if (resuming) initial = await readJob();
-  else initial = await executeBridgeCode(bridge, buildDrcStartCode({ target, jobId: effectiveJobId }), 20_000);
-  if (typeof initial?.jobId === 'string' && initial.jobId) effectiveJobId = initial.jobId;
-  const jobReused = initial?.reused === true || resuming;
-  if (initial?.state === 'COMPLETED' && !initial.report) initial = await readJob();
-  const job = await waitForDrcJob({
-    initial,
-    poll: readJob,
-    waitMs: drcWaitMs,
-    pollIntervalMs: drcPollIntervalMs,
-  });
-
-  if (job?.state === 'RUNNING') {
-    return {
-      ok: true,
-      bridge: { baseUrl: bridge.baseUrl, windowId: bridge.windowId },
-      status,
-      saved,
-      drcState: 'RUNNING',
-      drcJobId: effectiveJobId,
-      drcJobReused: jobReused,
-      drcStartedAt: job.startedAt ?? null,
-      drcCompletedAt: null,
-      drcDurationMs: null,
-      nativeDrcStarted: job.nativeCallStarted === true,
-      nativeDrcCompleted: false,
-      drcVerified: false,
-      drcOperationalSuccess: null,
-      drcErrorCount: null,
-      drcPassed: null,
-      drcItems: null,
-      drcSummary: null,
-      rawNativeDrcOmitted: true,
-      nextAction: { tool: 'pcb_save_and_drc', arguments: { target, save: false, runDrc: true, drcJobId: effectiveJobId, drcDetailOffset, drcDetailLimit } },
-    };
-  }
-
-  if (job?.state !== 'COMPLETED' || job?.report?.verified !== true) {
-    const error = new Error(job?.error?.message ?? `Native DRC job ended in state ${String(job?.state ?? 'UNKNOWN')}`);
-    error.code = job?.error?.code ?? 'NATIVE_DRC_UNVERIFIED';
-    error.details = {
-      drcState: job?.state ?? 'UNKNOWN',
-      drcJobId: effectiveJobId,
-      nativeDrcStarted: job?.nativeCallStarted === true,
-      startedAt: job?.startedAt ?? null,
-      completedAt: job?.completedAt ?? null,
-      durationMs: job?.durationMs ?? null,
-      nativeError: job?.error ?? null,
-      saved,
-    };
-    throw error;
-  }
-
-  const report = job.report;
-  const statusAfterDrc = await executeBridgeCode(bridge, buildReadCode({ kind: 'status', target }));
-  const summary = {
-    topLevelCount: report.topLevelCount,
-    groupCount: report.groupCount,
-    visitedNodes: report.visitedNodes,
-    visibleFindingCount: report.visibleFindingCount,
-    hiddenFindingCount: report.hiddenFindingCount,
-    countsByCategory: report.countsByCategory,
-    countsByRule: report.countsByRule,
-    countsByObjectType: report.countsByObjectType,
-    countsByLayer: report.countsByLayer,
-    countsByErrorType: report.countsByErrorType,
-    countsByRuleType: report.countsByRuleType,
-  };
-  return {
-    ok: true,
-    bridge: { baseUrl: bridge.baseUrl, windowId: bridge.windowId },
-    status,
-    statusAfterDrc,
-    saved,
-    drcState: 'COMPLETED',
-    drcJobId: effectiveJobId,
-    drcJobReused: jobReused,
-    drcJobReleased: job.released === true,
-    drcStartedAt: job.startedAt ?? null,
-    drcCompletedAt: job.completedAt ?? null,
-    drcDurationMs: job.durationMs ?? null,
-    nativeDrcStarted: job.nativeCallStarted === true,
-    nativeDrcCompleted: true,
-    drcOperationalSuccess: true,
-    drcVerified: true,
-    drcErrorCount: report.total,
-    drcPassed: report.total === 0,
-    drcItems: report.items,
-    drcItemsOffset: report.page.offset,
-    drcItemsLimit: report.page.limit,
-    drcItemsReturned: report.page.returned,
-    drcItemsHasMore: report.page.hasMore,
-    drcItemsNextOffset: job.released === true ? null : report.page.nextOffset,
-    drcDetailsComplete: report.page.detailsComplete,
-    drcDetailsDiscarded: job.released === true && report.page.hasMore,
-    drcSummary: summary,
-    rawNativeDrcOmitted: job.rawNativeReportOmitted === true,
-  };
+export async function saveAndCheck({target,save,runDrc=true,drcJobId=null,drcWaitMs=15000,drcPollIntervalMs=300,drcDetailOffset=0,drcDetailLimit=100,releaseDrcJob=false}){
+ if(!target?.documentUuid)fail('Exact PCB target is required');
+ if(drcJobId!=null&&(typeof drcJobId!=='string'||!drcJobId.trim()))fail('drcJobId must be nonempty');
+ if(!Number.isSafeInteger(drcDetailOffset)||drcDetailOffset<0)fail('drcDetailOffset must be nonnegative');
+ if(!Number.isSafeInteger(drcDetailLimit)||drcDetailLimit<0||drcDetailLimit>250)fail('drcDetailLimit must be 0..250');
+ if(!Number.isSafeInteger(drcWaitMs)||drcWaitMs<0||drcWaitMs>45000)fail('drcWaitMs must be 0..45000');
+ if(!Number.isSafeInteger(drcPollIntervalMs)||drcPollIntervalMs<100||drcPollIntervalMs>2000)fail('drcPollIntervalMs must be 100..2000');
+ const resuming=drcJobId!=null,shouldSave=save??!resuming;
+ if(resuming&&shouldSave)fail('DRC continuation must use save=false');
+ if(!runDrc&&resuming)fail('drcJobId requires runDrc=true');
+ assertAllowedTarget(target);
+ const bridge=await resolveBridge({windowId:target.windowId}),status=await executeBridgeCode(bridge,statusCode(target));
+ const saved=shouldSave?await saveDocument(bridge,target):null;
+ if(!runDrc)return {ok:true,target,status,saved,drcState:'NOT_REQUESTED',drcVerified:false,drcErrorCount:null,drcPassed:null};
+ let effectiveJobId=drcJobId??createDrcJobId();
+ const readJob=()=>executeBridgeCode(bridge,buildDrcStatusCode({target,jobId:effectiveJobId,offset:drcDetailOffset,limit:drcDetailLimit,release:releaseDrcJob}),20_000);
+ let initial=resuming?await readJob():await executeBridgeCode(bridge,buildDrcStartCode({target,jobId:effectiveJobId}),20_000);
+ if(typeof initial?.jobId==='string'&&initial.jobId)effectiveJobId=initial.jobId;
+ if(initial?.state==='COMPLETED'&&!initial.report)initial=await readJob();
+ const job=await waitForDrcJob({initial,poll:readJob,waitMs:drcWaitMs,pollIntervalMs:drcPollIntervalMs});
+ if(job?.state==='RUNNING')return {ok:true,target,status,saved,drcState:'RUNNING',drcJobId:effectiveJobId,drcVerified:false,nextAction:{tool:'pcb_save_and_drc',arguments:{target:target.documentUuid,save:false,runDrc:true,drcJobId:effectiveJobId,drcDetailOffset,drcDetailLimit}}};
+ if(job?.state!=='COMPLETED'||job?.report?.verified!==true){const error=new Error(job?.error?.message??`Native DRC ended in ${String(job?.state??'UNKNOWN')}`);error.code=job?.error?.code??'NATIVE_DRC_UNVERIFIED';error.details={drcState:job?.state??'UNKNOWN',drcJobId:effectiveJobId,nativeError:job?.error??null,saved};throw error;}
+ const report=job.report,statusAfterDrc=await executeBridgeCode(bridge,statusCode(target));
+ return {ok:true,target,status,statusAfterDrc,saved,drcState:'COMPLETED',drcJobId:effectiveJobId,drcJobReleased:job.released===true,drcStartedAt:job.startedAt??null,drcCompletedAt:job.completedAt??null,drcDurationMs:job.durationMs??null,drcVerified:true,drcErrorCount:report.total,drcPassed:report.total===0,drcItems:report.items,drcItemsOffset:report.page.offset,drcItemsLimit:report.page.limit,drcItemsReturned:report.page.returned,drcItemsHasMore:report.page.hasMore,drcItemsNextOffset:job.released===true?null:report.page.nextOffset,drcDetailsComplete:report.page.detailsComplete,drcSummary:{topLevelCount:report.topLevelCount,groupCount:report.groupCount,visitedNodes:report.visitedNodes,visibleFindingCount:report.visibleFindingCount,hiddenFindingCount:report.hiddenFindingCount,countsByCategory:report.countsByCategory,countsByRule:report.countsByRule,countsByObjectType:report.countsByObjectType,countsByLayer:report.countsByLayer,countsByErrorType:report.countsByErrorType,countsByRuleType:report.countsByRuleType},rawNativeDrcOmitted:true};
 }

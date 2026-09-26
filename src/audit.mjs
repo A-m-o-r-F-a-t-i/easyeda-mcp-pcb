@@ -22,10 +22,10 @@ function indexPoints(points, tolerance) {
   };
 }
 export function auditGeometry(snapshot, {toleranceMil=0.02, detailLimit=100}={}) {
-  if(!snapshot || !['mil','mm'].includes(snapshot.units)) throw Error('snapshot.units must explicitly be mil or mm');
+  if(!snapshot || snapshot.units!=='mil') throw Error('Geometry audit requires a mil snapshot');
   if(!(finite(toleranceMil,'toleranceMil')>0 && toleranceMil<=0.1)) throw Error('toleranceMil must be (0,0.1]');
   if(!Number.isInteger(detailLimit)||detailLimit<0||detailLimit>5000) throw Error('detailLimit must be 0..5000');
-  const scale=snapshot.units==='mm'?1/0.0254:1, t=toleranceMil;
+  const scale=1, t=toleranceMil;
   const rawLines=array(snapshot.lines,'lines'), rawArcs=array(snapshot.arcs,'arcs',true), rawPads=array(snapshot.pads,'pads',true), rawVias=array(snapshot.vias,'vias',true);
   const warnings=[];
   if(!Object.hasOwn(snapshot,'pads')) warnings.push('Pad centers unavailable: ordinary-joint classification is provisional');
@@ -108,7 +108,7 @@ export function auditGeometry(snapshot, {toleranceMil=0.02, detailLimit=100}={})
     if(category!=='ordinary'&&orthogonalPairs)special.push({x:n.x,y:n.y,net:n.net,layer:n.layer,category,degree:n.ends.length,orthogonalPairs});
   }
   const findings=non45.length+degenerate.length+ordinary.length+special.length;
-  return {ok:true,readOnly:true,scope:'supplied straight and circular-arc copper with coincident endpoint centers',units:'mil',inputUnits:snapshot.units,toleranceMil:t,
+  return {ok:true,readOnly:true,scope:'supplied straight and circular-arc copper with coincident endpoint centers',units:'mil',toleranceMil:t,
     verdict:findings||warnings.length?'REVIEW_REQUIRED':'NO_FINDINGS_IN_CHECKED_SCOPE',engineeringRelease:'NOT_EVALUATED',
     counts:{inputLines:rawLines.length,copperLines:rawLines.length-ignoredNonCopper,ignoredNonCopper,inputArcs:rawArcs.length,copperArcs:rawArcs.length-ignoredNonCopperArcs,ignoredNonCopperArcs,pads:pads.length,vias:vias.length,non45Segments:non45.length,degenerateSegments:degenerate.length,ordinaryBadJoints:ordinary.length,ordinaryNodes,padNodes,viaNodes,branchNodes,orthogonalPairs:pairCounts},
     details:{non45:non45.slice(0,detailLimit),degenerate:degenerate.slice(0,detailLimit),ordinaryBadJoints:ordinary.slice(0,detailLimit),specialOrthogonalNodes:special.slice(0,detailLimit)},

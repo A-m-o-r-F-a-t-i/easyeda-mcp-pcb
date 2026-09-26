@@ -142,7 +142,7 @@ export async function captureInspectionView(request) {
   const visibleLayerIds = request.visibleLayerIds === undefined ? null : request.visibleLayerIds;
   const settleMs = request.settleMs ?? 150;
   if (!Number.isInteger(settleMs) || settleMs < 0 || settleMs > 2000) throw Error('settleMs must be 0..2000');
-  const bridge = await resolveBridge({ bridgeUrl: request.bridgeUrl, windowId: request.target.windowId, requireEda: true });
+  const bridge = await resolveBridge({ windowId: request.target.windowId, requireEda: true });
   const runtimeRequest = { target: request.target, visibleLayerIds, settleMs, maxBytes };
   const payload = await executeBridgeCode(bridge, `return await (${inspectionViewRuntime.toString()})(eda,${JSON.stringify(runtimeRequest)});`, 180_000);
   const bytes = decodeBackup(payload, maxBytes, 'png');

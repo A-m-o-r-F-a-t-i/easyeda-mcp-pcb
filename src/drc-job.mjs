@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { summarizeDrcReport } from './drc-report.mjs';
 
-export const DRC_JOB_REGISTRY_KEY = '__easyedaPcbMcpDrcJobsV1';
+export const DRC_JOB_REGISTRY_KEY = '__easyedaPcbDrcJobs';
 export const DRC_JOB_TERMINAL_TTL_MS = 15 * 60 * 1000;
 export const DRC_JOB_MAX_RUNTIME_MS = 10 * 60 * 1000;
 
@@ -27,8 +27,8 @@ if(target.projectUuid&&projectInfo?.uuid!==target.projectUuid)throw new Error('P
 const registryKey=${JSON.stringify(DRC_JOB_REGISTRY_KEY)};
 const now=Date.now();
 let registry=globalThis[registryKey];
-if(!registry||registry.version!==1||!registry.jobs||typeof registry.jobs!=='object'){
-  registry={version:1,jobs:Object.create(null)};
+if(!registry||!registry.jobs||typeof registry.jobs!=='object'){
+  registry={jobs:Object.create(null)};
   globalThis[registryKey]=registry;
 }
 const jobs=registry.jobs;
@@ -64,7 +64,7 @@ if(collision){
   return describe(collision,true);
 }
 const job={
-  schema:'easyeda-pcb-drc-job/v1',jobId:requestedJobId,targetKey,
+  jobId:requestedJobId,targetKey,
   target:{windowId:target.windowId,projectUuid:target.projectUuid,documentUuid:target.documentUuid},
   state:'RUNNING',startedAt:now,completedAt:null,nativeCallStarted:false,result:null,error:null,
 };

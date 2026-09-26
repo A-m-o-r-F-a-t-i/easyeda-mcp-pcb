@@ -1,19 +1,21 @@
 {
   "name": "easyeda-pcb-mcp",
-  "version": "3.0.1",
+  "version": "4.1.0",
   "private": true,
   "type": "module",
-  "description": "Explicit EasyEDA Pro PCB layout and routing operations over the existing local Bridge",
+  "description": "MIL-only EasyEDA PCB MCP with direct bulk editing, complete overview and SVG feedback",
   "engines": {
     "node": ">=22"
   },
   "scripts": {
     "start": "node src/server.mjs",
-    "test": "node --test test/*.test.mjs",
-    "smoke": "node test/mcp-smoke.mjs"
+    "test": "node --test --test-concurrency=1 test/*.test.mjs",
+    "smoke": "node scripts/mcp-smoke.mjs",
+    "live:readonly": "node scripts/read-only-v4.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
+    "polygon-clipping": "0.15.7",
     "zod": "4.6.4"
   }
 }

@@ -1,7 +1,7 @@
 /** MCP-owned native editing wrapper. No design gates, placement optimizer or path search. */
 export async function simpleEditRuntime(eda, job, factory) {
   const h=factory(eda,job),{state,id,serialize,api,point,length,layer,checkTarget,fail}=h;
-  const storage=globalThis.__easyedaPcbV3Executions??=new Map();
+  const storage=globalThis.__easyedaPcbExecutions??=new Map();
   const key=job.executionId;
   if(job.inspect){const prior=storage.get(key);return prior?{ok:true,found:true,...prior}:{ok:true,found:false};}
   let journal=storage.get(key);
@@ -29,13 +29,26 @@ export async function simpleEditRuntime(eda, job, factory) {
     return r;
   };
   const modify=async(kind,o,set)=>acknowledge(kind,'modify',()=>api(kind).modify(id(o),set),id(o));
-  const failedDependency=op=>[op.ref,...(op.netEndpoints??[]),op.from,op.to].filter(x=>typeof x==='string').some(ref=>journal.failedRefs.some(f=>ref===f||ref.startsWith(f+'.')));
+  const failedDependency=op=>[op.ref,...(op.netEndpoints??[]),op.from,op.to,op.toward].filter(x=>typeof x==='string').some(ref=>journal.failedRefs.some(f=>ref===f||ref.startsWith(f+'.')));
   const execute=async op=>{
     if(failedDependency(op)&&op.op!=='place_one')fail('DEPENDENCY_FAILED','A component required by this action was not successfully placed');
     if(op.op==='place_one'){
       const c=await h.component(op.ref),set=await h.patch(Object.fromEntries(Object.entries(op).filter(([k])=>['at','angle','side','locked'].includes(k))),'component');
       if(!Object.keys(set).length)fail('INVALID_PARAMETER','Placement needs at least one changed property');
       const r=await modify('component',c,set);journal.failedRefs=journal.failedRefs.filter(x=>x!==op.ref);
+      r.pads=(await h.pins(r.primitiveIds[0]??id(c))).map(serialize);return;
+    }
+    if(op.op==='orient'){
+      const c=await h.component(op.ref),all=await h.pins(c),numbers=[...new Set(op.pads)];
+      const selected=numbers.map(number=>{const matches=all.filter(p=>String(state(p,'padNumber'))===number);if(matches.length!==1)fail('AMBIGUOUS_PAD','Orientation pad must resolve uniquely: '+op.ref+'.'+number);return matches[0];});
+      const cx=state(c,'x'),cy=state(c,'y'),center=op.at?point(op.at):[cx,cy];
+      const face=selected.reduce((a,p)=>[a[0]+state(p,'x')/selected.length,a[1]+state(p,'y')/selected.length],[0,0]);
+      const destination=await h.endpoint(op.toward),v=[face[0]-cx,face[1]-cy],aim=[destination.at[0]-center[0],destination.at[1]-center[1]];
+      if(Math.hypot(...v)<1e-8||Math.hypot(...aim)<1e-8)fail('UNDEFINED_ORIENTATION','Selected pad centroid and target must define nonzero directions');
+      if(typeof op.toward==='string'&&op.toward.startsWith(op.ref+'.'))fail('SELF_TARGET','Orient toward an external endpoint or an explicit board point');
+      const degrees=((state(c,'rotation')??0)+(Math.atan2(aim[1],aim[0])-Math.atan2(v[1],v[0]))*180/Math.PI+720)%360;
+      const r=await modify('component',c,{rotation:degrees,...(op.at?{x:center[0],y:center[1]}:{})});
+      r.orientation={padNumbers:numbers,toward:destination.at,angle:degrees,sameSide:true};
       r.pads=(await h.pins(r.primitiveIds[0]??id(c))).map(serialize);return;
     }
     if(op.op==='axis_place'){const c=await h.component(op.ref);await modify('component',c,{[op.axis]:length(op.value)});return;}

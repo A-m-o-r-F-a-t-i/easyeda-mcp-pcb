@@ -1,6 +1,5 @@
 /** Serialized with the MCP-owned adapter; this factory has no host dependencies. */
 export function createNativeHelpers(eda, request) {
-  const factor=request.units==='mil'?1:1/0.0254;
   const modules={component:'pcb_PrimitiveComponent',pad:'pcb_PrimitivePad',via:'pcb_PrimitiveVia',line:'pcb_PrimitiveLine',arc:'pcb_PrimitiveArc',polyline:'pcb_PrimitivePolyline',fill:'pcb_PrimitiveFill',pour:'pcb_PrimitivePour',poured:'pcb_PrimitivePoured',region:'pcb_PrimitiveRegion',string:'pcb_PrimitiveString',attribute:'pcb_PrimitiveAttribute'};
   const fields=['primitiveType','primitiveId','parentId','parentPrimitiveId','componentPrimitiveId','parentComponentPrimitiveId','component','footprint','otherProperty','designator','name','uniqueId','layer','x','y','rotation','primitiveLock','padNumber','padType','net','pad','hole','holeOffsetX','holeOffsetY','holeRotation','metallization','startX','startY','endX','endY','arcAngle','interactiveMode','lineWidth','diameter','holeDiameter','viaType','polygon','complexPolygon','pourName','pourPriority','preserveSilos','pourPrimitiveId','pourFills','fillMode','ruleType','regionName','text','fontFamily','fontSize','alignMode','reverse','expansion','mirror','key','value','keyVisible','valueVisible','manufacturer','manufacturerId','supplier','supplierId'];
   const fail=(code,message,details)=>{const e=new Error(message);e.code=code;e.details=details;throw e;};
@@ -10,7 +9,7 @@ export function createNativeHelpers(eda, request) {
   const id=o=>state(o,'primitiveId');
   const api=kind=>{const value=eda[modules[kind]];if(!value)fail('API_UNAVAILABLE','Native API unavailable for '+kind);return value;};
   const checkTarget=async()=>{const d=await eda.dmt_SelectControl.getCurrentDocumentInfo(),p=await eda.dmt_Project.getCurrentProjectInfo();if(d?.documentType!==3||d.uuid!==request.target.documentUuid||p?.uuid!==request.target.projectUuid)fail('TARGET_CHANGED','The active PCB no longer matches this request');return {document:d,project:p};};
-  const length=v=>{if(!Number.isFinite(v))fail('INVALID_PARAMETER','A finite length is required');return v*factor;};
+  const length=v=>{if(!Number.isFinite(v))fail('INVALID_PARAMETER','A finite mil value is required');return v;};
   const point=p=>{if(!Array.isArray(p)||p.length!==2)fail('INVALID_PARAMETER','Expected [x,y]');return p.map(length);};
   const layerMap={top:1,bottom:2,top_silkscreen:3,bottom_silkscreen:4,board_outline:11,multi:12,...Object.fromEntries(Array.from({length:30},(_,i)=>['inner_'+(i+1),i+15]))};
   let layers=null;
@@ -91,5 +90,5 @@ export function createNativeHelpers(eda, request) {
     }
     return out;
   };
-  return {factor,modules,fail,state,native,serialize,id,api,checkTarget,length,point,layer,all,one,components,component,pins,rememberComponent,endpoint,polygonSource,polygon,padShape,hole,select,patch};
+  return {modules,fail,state,native,serialize,id,api,checkTarget,length,point,layer,all,one,components,component,pins,rememberComponent,endpoint,polygonSource,polygon,padShape,hole,select,patch};
 }

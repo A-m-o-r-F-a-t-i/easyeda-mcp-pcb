@@ -1,46 +1,40 @@
-# EasyEDA PCB MCP 3.0.1
+# EasyEDA PCB MCP 4.1.0
 
-MCP-first typed wrappers for common EasyEDA PCB operations. The model supplies design intent; MCP handles object IDs, coordinate conversion, native signatures, bulk calls and factual feedback. No automatic placement or path search, no ordinary prepare/guard chain, and no design-approval gate.
+One MIL-only, 17-tool MCP surface built on the direct-edit v4 refactor. The model owns layout, routing choices and analysis timing. MCP resolves native objects, executes explicitly specified geometry, and returns factual results. No automatic placement, route search, design permission gates or legacy profiles.
 
-## Default interface
+## Editing
 
-The default registry contains 21 tools. pcb_execute_plan accepts typed operations directly; pcb_execute_text_plan uses the same contract. Use designators, U1.12 pin endpoints and layer names. Coordinate input, overview/pin data, picking, SVG regions and pick-and-place export default to mil; pass `units: "mm"` or `unit: "mm"` explicitly when metric input/output is required. Actual raw native geometry is explicitly labeled mil. Unspecified properties remain unchanged.
+`pcb_edit` accepts ordered operations using designators, `U1.12` pad endpoints and native layer names. All coordinates, dimensions, widths, drill sizes and measurements are mil. Unspecified fields retain their current value. Common operations cover placement, alignment/transform, explicit routes/arcs, vias, pads, holes/slots, outline/fill/pour/region geometry, text, modify/delete and designator cleanup.
 
-Placement, transform/alignment/radial arrays, explicit routes/arcs, vias, holes/slots, pads, outlines, fill/pour/region geometry, text, modify/delete, cleanup, component insertion and copper-layer count are wrapped. Public batch arrays have no small fixed cap; transport byte/time slicing is internal and preserves order.
+New operations are `orient` (aim an explicitly selected pad group at an endpoint on the current side), `copper_path` (construct one copper corridor from the supplied centerline and width), and `via_array` (explicit rotated grid). They do not choose paths, clear obstacles, infer current ratings or delete old copper. The full typed contract is available through `pcb_read(kind="operations")`.
 
-A unique connected PCB needs no target. Ambiguous multi-board sessions use an exact document UUID or explicit target object. No process-global last-window cache is shared between conversations. Existing permission boundaries and native API argument requirements remain in force.
+## Physical copper analysis
 
-## Read and feedback
+`pcb_read(kind="topology")` and `pcb_audit_geometry(checks=["topology"])` share the same physical-copper model. Read one scene and select nets, endpoint pairs (`paths`), explicit cross-sections (`sections`) and optional hypothetical removals (`excludeIds`). Reports include pad membership, connected copper components, existing path layer transitions, via dimensions and modeled mandatory single-via links. Copper-only islands are observations, never an automatic deletion instruction.
 
-pcb_read(kind=overview) returns component/device/footprint identity, value, pose, physical dimension sources, actual pad/net mappings and same-side orientation maps. Unknown native body/assembly geometry remains null; graphical BBoxes are not physical-body measurements. Raw native arrays retain their labeled units.
+Actual fills, verified poured contours, concavities and holes participate in contact calculations. Pour boundaries alone are not conductive. Unknown coordinate frames, drill types, blind/buried via spans or missing native data remain explicit coverage gaps. Curves are tessellated with a reported chord-error tolerance. Cross-sections measure only their submitted locations; there is no global minimum-neck or electrical-current-sharing solver. Native DRC, this model, and electrical/thermal validation are distinct.
 
-pcb_read(kind=operations) publishes the full editing schema. Oversized results are retained with a resultId and complete component index; kind=result pages original data without another PCB read.
+## Execution receipts
 
-Editing view=auto/local/board/none controls SVG feedback. pcb_render_inspection_svg provides top/bottom/both views, regions, explicit layers and net highlighting with optional pin/net labels. SVG overlays are not manufacturing silkscreen. Bottom geometry is mirrored once, with annotation text kept readable. Missing geometry is reported.
+An optional `requestId` binds a durable intent to exactly that request content. Reusing identical content returns the retained result without redispatch; conflicting content fails. `pcb_read(kind="receipt", receiptId="...")` reads a receipt, `kind="receipts"` lists recent records, and `refresh=true` only attempts a native-journal read.
 
-## Execution results
+Receipts distinguish confirmed edits, failed/unknown/not-executed operations, save failure and SVG failure. `boardDelta` contains created/modified/deleted IDs. `wrotePcb=null` means an unconfirmed outcome. Intent and progress are persisted before native dispatch. This prevents duplicate dispatch while that state exists; it is not an atomic PCB transaction, automatic rollback or crash-proof exactly-once native execution. Unknown writes are never blindly replayed.
 
-Results distinguish applied, failed, partial, unknown and not_executed. Native-returned object state is factual acknowledgement, not PCB quality approval. Save and SVG-generation failures are reported separately from successful edits. Unknown writes are not blindly replayed. Internal execution journals are bounded recovery aids, not atomic transactions or backups.
+## Reading and feedback
 
-DRC, netlist comparison, geometry and silkscreen inspection are optional data tools; none grants or revokes editing permission. pcb_verify_api_gates retains its historical name only as a combined data report. Native DRC running jobs and detail pagination remain supported.
+Overview includes actual component/pad/net orientations and dimension provenance. Large results are retained and paged using `pcb_read(kind="result")`; retained file lookup survives MCP-process restart. `pcb_render_svg` supports regions, layers and net highlighting. Compound paths preserve holes with even-odd fill; circular/rotated bounds and copper-only edit regions are handled. Inspection labels never become board silkscreen. `pcb_capture_view` provides the native viewport when actual rendering is needed.
 
-## Installation and verification
+## Configuration and verification
 
-Node.js >=22 is required. Install locked dependencies, then run:
+Node.js >=22 is required. Run `npm ci --ignore-scripts`, `npm test`, `npm run smoke`, then `node src/server.mjs`. Only one default server is registered.
 
-~~~text
-npm ci
-npm test
-npm run smoke
-node src/server.mjs
-~~~
+| Variable | Purpose |
+| --- | --- |
+| EASYEDA_BRIDGE_URL | Optional existing loopback Bridge in the documented port range |
+| EASYEDA_ALLOWED_PROJECT_UUIDS | Optional explicit project scope |
+| EASYEDA_PCB_STATE_DIR | Optional persistent receipt root; otherwise PLUGIN_DATA or the user's .easyeda-pcb directory |
+| EASYEDA_PCB_ARTIFACT_DIR | Optional SVG and retained-result directory |
 
-Only the default service should be registered. Legacy and diagnostics profiles remain source-level compatibility/testing options, not additional default tool menus. Historical v2 plan helpers retain their old behavior only when explicitly used; they are not the v3 editing contract.
+Runtime state and user geometry must not be committed. Tests use synthetic native mocks and graph fixtures. Real-client read-only results and real test-copy writes are reported separately; tool maintenance never uses the production board for mutation tests. Gateway and AgentDock do not require modification for this release.
 
-The read-only integration script scripts/read-only-v3.mjs requires an exact document UUID and never edits, saves, runs DRC or changes the viewport. v3 has offline native mocks and real 4.1.60 read-only coverage. These do not establish that every write combination has been tested in a live editor. Do not run old live-write probes on a production board.
-
-Known client differences include canonical-vs-component drill fields, world-coordinate polygon pads, missing body outlines, uncertain native REGION behavior and partial repour side effects. Unknown representations remain disclosed; MCP does not quietly rewrite geometry or rules. See the accompanying PCB Skill for detailed usage.
-
-Common PCB actions use MCP first. Raw API code is only for a specific missing wrapper or diagnosis; add missing common operations to MCP rather than turning fallback scripts into a normal workflow.
-
-[中文说明](README.zh-CN.md)
+[中文](README.zh-CN.md)

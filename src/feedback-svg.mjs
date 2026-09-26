@@ -1,4 +1,4 @@
-import { parseComplexPolygon } from './vector-inspection.mjs';
+import {parseComplexPolygon} from './polygon-path.mjs';
 import { describeArc, arcSvgPath, arcBounds } from './arc-geometry.mjs';
 import { padBounds } from './component-overview.mjs';
 const f=n=>Number(n.toFixed(4));
@@ -15,12 +15,12 @@ export function renderFeedbackSvg(scene,options={}){
  const tag=o=>`data-primitive-id="${esc(o.primitiveId)}" data-net="${esc(o.net)}" data-layer="${esc(o.layer)}"`;
  const shapes=[],allBounds=[],labels=[],omitted=[];
  const add=(o,b,svg)=>{if(!finiteBox(b))return;allBounds.push(b);if(visible(o.layer)&&intersects(b,region))shapes.push(`<g ${tag(o)} ${style(o)}><title>${esc([o.primitiveId,o.net].filter(Boolean).join(' / '))}</title>${svg}</g>`);};
- const path=(o,source,fill='none')=>{const paths=parseComplexPolygon(source);if(!paths.length){omitted.push({id:o.primitiveId,reason:'unavailable or unsupported polygon source'});return;}for(const p of paths)add(o,p.bounds,`<path d="${p.d}"${p.transform??''} fill="${fill}" fill-opacity="0.15" stroke-width="${f(o.lineWidth??1)}"/>`);};
+ const path=(o,source,fill='none')=>{const paths=parseComplexPolygon(source);if(!paths.length){omitted.push({id:o.primitiveId,reason:'unavailable or unsupported polygon source'});return;}const transforms=new Map();for(const p of paths){const key=p.transform??'';if(!transforms.has(key))transforms.set(key,[]);transforms.get(key).push(p);}for(const [transform,group]of transforms)add(o,merge(group.map(p=>p.bounds)),`<path d="${group.map(p=>p.d).join(' ')}"${transform} fill="${fill}" fill-rule="evenodd" fill-opacity="0.15" stroke-width="${f(o.lineWidth??1)}"/>`);};
  for(const o of scene.pours??[])path(o,o.complexPolygon);
  for(const o of scene.poured??[]){
   const parent=(scene.pours??[]).find(p=>p.primitiveId===(o.pourPrimitiveId??o.primitiveId));
   if(!parent||o.fillGeometry?.verified!==true){omitted.push({id:o.primitiveId,reason:'actual fill coordinates not available in canonical mil'});continue;}
-  for(const fill of o.pourFillsMil??[])path({...o,layer:parent.layer,net:parent.net},fill.path?.complexPolygon,colors[parent.layer]??'#8b98a7');
+  for(const fill of o.pourFillsMil??[])path({...o,layer:parent.layer,net:parent.net},fill.path?.complexPolygon??fill.path,colors[parent.layer]??'#8b98a7');
  }
  for(const kind of ['fills','regions','polylines'])for(const o of scene[kind]??[])path(o,o.polygon??o.complexPolygon,kind==='fills'?(colors[o.layer]??'#8b98a7'):'none');
  for(const o of scene.lines??[]){const r=(o.lineWidth??1)/2,b={minX:Math.min(o.startX,o.endX)-r,maxX:Math.max(o.startX,o.endX)+r,minY:Math.min(o.startY,o.endY)-r,maxY:Math.max(o.startY,o.endY)+r};add(o,b,`<line x1="${f(o.startX)}" y1="${f(o.startY)}" x2="${f(o.endX)}" y2="${f(o.endY)}" stroke-width="${f(o.lineWidth??1)}" stroke-linecap="round"/>`);}
@@ -39,7 +39,7 @@ export function renderFeedbackSvg(scene,options={}){
   if(type==='ELLIPSE')element=`<ellipse rx="${f(w/2)}" ry="${f(height/2)}"/>`;
   else if(type==='OVAL'||type==='RECT')element=`<rect x="${f(-w/2)}" y="${f(-height/2)}" width="${f(w)}" height="${f(height)}" rx="${f(type==='OVAL'?Math.min(w,height)/2:s[3]??0)}"/>`;
   else if(type==='NGON')element=`<polygon points="${Array.from({length:s[2]},(_,i)=>{const a=i*2*Math.PI/s[2]-Math.PI/2;return `${f(w/2*Math.cos(a))},${f(w/2*Math.sin(a))}`;}).join(' ')}"/>`;
-  else if(type==='POLYGON')element=parseComplexPolygon(s[1]).map(x=>`<path d="${x.d}"/>`).join('');
+  else if(type==='POLYGON')element=`<path d="${parseComplexPolygon(s[1]).map(x=>x.d).join(' ')}" fill-rule="evenodd"/>`;
   add(p,b,`<g${type==='POLYGON'&&p.padGeometryFrame==='board'?'':` transform="translate(${f(p.x)} ${f(p.y)}) rotate(${f(p.rotation??0)})"`} fill="${colors[p.layer]??'#b2a2db'}" stroke-width="0.7">${element}</g>`);
   if(p.layer===12&&p.physicalDrill?.present!==false&&p.hole){const hw=p.hole[1],hh=p.hole[2]??hw;add(p,b,`<g transform="translate(${f(p.x)} ${f(p.y)}) rotate(${f(p.rotation??0)}) translate(${f(p.holeOffsetX??0)} ${f(p.holeOffsetY??0)}) rotate(${f(p.holeRotation??0)})" fill="#15181e" stroke="#8b96a8" stroke-width="0.6">${p.hole[0]==='SLOT'?`<rect x="${f(-hw/2)}" y="${f(-hh/2)}" width="${f(hw)}" height="${f(hh)}" rx="${f(hw/2)}"/>`:`<circle r="${f(hw/2)}"/>`}</g>`);}
   if(options.pinLabels!==false&&visible(p.layer)&&intersects(b,region)){
@@ -68,7 +68,7 @@ export function renderFeedbackSvg(scene,options={}){
   }else{const y=y0+font+i*rowHeight;text.push(`<g data-primitive-id="${esc(p.id)}" data-net="${esc(p.net)}"><path d="M ${f(p.x)} ${f(p.y)} L ${f(legendX-font)} ${f(y)}" stroke="#a6afbe" stroke-opacity="0.55" stroke-width="0.6" fill="none"/><circle cx="${f(p.x)}" cy="${f(p.y)}" r="2" fill="#f2bd50"/><text x="${f(legendX)}" y="${f(y)}" font-size="${font}" fill="#e6ebf2">${esc(p.text)}</text></g>`);}
  }
  for(const s of scene.strings??[])if(visible(s.layer)&&Number.isFinite(s.x)&&Number.isFinite(s.y)&&within({x:mx*s.x,y:-s.y}))text.push(`<text data-primitive-id="${esc(s.primitiveId)}" x="${f(mx*s.x)}" y="${f(-s.y)}" font-size="${f(s.fontSize??font)}" transform="rotate(${f(-(s.rotation??0)*mx)} ${f(mx*s.x)} ${f(-s.y)})" fill="#cbd3df">${esc(s.text)}</text>`);
- const metadata={schema:'easyeda-pcb-feedback-svg/v3',document:scene.document,sourceUnits:'mil',side,fit:region?'region':options.fit==='all'?'all':'board',observation:side==='bottom'?'bottom view mirrored once about board Y axis':'top view',pinLabelCount:pinLabels.length,pinLabelLayout:dense?'indexed-grid':'leaders',legendColumns:columns,componentLabelCount:labels.length,componentsOutsideView:scene.components.filter(c=>!within({x:mx*c.x,y:-c.y})).map(c=>c.designator??c.primitiveId),coverage:scene.coverage,omitted,notes:['Dashed component boxes are native graphical BBoxes, not physical bodies.','Labels and leader lines are inspection overlays; they are not written to PCB silkscreen.']};
+ const metadata={schema:'easyeda-pcb-feedback-svg/v4',document:scene.document,sourceUnits:'mil',side,fit:region?'region':options.fit==='all'?'all':'board',observation:side==='bottom'?'bottom view mirrored once about board Y axis':'top view',pinLabelCount:pinLabels.length,pinLabelLayout:dense?'indexed-grid':'leaders',legendColumns:columns,componentLabelCount:labels.length,componentsOutsideView:scene.components.filter(c=>!within({x:mx*c.x,y:-c.y})).map(c=>c.designator??c.primitiveId),coverage:scene.coverage,omitted,notes:['Dashed component boxes are native graphical BBoxes, not physical bodies.','Labels and leader lines are inspection overlays; they are not written to PCB silkscreen.']};
  const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="${Math.round(1600*height/width)}" viewBox="${f(x0)} ${f(y0)} ${f(width)} ${f(height)}"><title>PCB ${esc(side)} view</title><metadata>${esc(JSON.stringify(metadata))}</metadata><rect x="${f(x0)}" y="${f(y0)}" width="${f(width)}" height="${f(height)}" fill="#15181e"/><defs><clipPath id="board-view"><rect x="${f(mx===1?bounds.minX:-bounds.maxX)}" y="${f(-bounds.maxY)}" width="${f(bounds.maxX-bounds.minX)}" height="${f(bounds.maxY-bounds.minY)}"/></clipPath></defs><g clip-path="url(#board-view)"><g transform="scale(${mx},-1)">${shapes.join('')}</g></g><g font-family="Arial,Microsoft YaHei,sans-serif" dominant-baseline="middle">${text.join('')}</g></svg>`;
  return {svg,metadata,viewBox:{x:x0,y:y0,width,height},boardBounds:bounds};
 }
